@@ -48,7 +48,6 @@ internal class TerrainProcessor : IDisposable
     private int _leafNodeX;
     private int _leafNodeY;
     private int _lodCount;
-    private PushConstants _pushConstants;
 
     private readonly Callable _cachedDispatchCallback;
 
@@ -81,17 +80,6 @@ internal class TerrainProcessor : IDisposable
     public bool Inited { get; private set; } = false;
 
     #region Data struct Definition
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    private struct PushConstants()
-    {
-        public Vector4 FrustumPlane0 = Vector4.Zero;
-        public Vector4 FrustumPlane1 = Vector4.Zero;
-        public Vector4 FrustumPlane2 = Vector4.Zero;
-        public Vector4 FrustumPlane3 = Vector4.Zero;
-        public Vector4 FrustumPlane4 = Vector4.Zero;
-        public Vector4 FrustumPlane5 = Vector4.Zero;
-    }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     private struct TerrainParams
@@ -212,10 +200,7 @@ internal class TerrainProcessor : IDisposable
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _computePipeline);
             rd.ComputeListBindUniformSet(computeList, _computeSet, 0);
-            ReadOnlySpan<byte> pushConstantBytes =
-            MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref _pushConstants, 1));
-            rd.ComputeListSetPushConstant(computeList, pushConstantBytes, (uint)pushConstantBytes.Length);
-            rd.ComputeListDispatch(computeList, (uint)selectedCount, 1, 1);
+            rd.ComputeListDispatch(computeList, (uint)(Math.Ceiling(selectedCount / 64f)), 1, 1);
             rd.ComputeListEnd();
         }
 
@@ -225,7 +210,7 @@ internal class TerrainProcessor : IDisposable
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _buildSubdivisionMapPipeline);
             rd.ComputeListBindUniformSet(computeList, _buildSubdivisionMapSet0, 0);
-            rd.ComputeListDispatch(computeList, (uint)subdivisionCount, 1, 1);
+            rd.ComputeListDispatch(computeList, (uint)(Math.Ceiling(subdivisionCount / 64f)), 1, 1);
             rd.ComputeListEnd();
         }
 
@@ -240,17 +225,6 @@ internal class TerrainProcessor : IDisposable
             rd.ComputeListDispatch(computeList, nDisPatch, nDisPatch, 1);
             rd.ComputeListEnd();
         }
-    }
-
-    private void UpdateFrustumAndCamera(Camera3D camera)
-    {
-        var frustumPlanes = camera.GetFrustum().ToArray();
-        _pushConstants.FrustumPlane0 = frustumPlanes[0].ToVector4();
-        _pushConstants.FrustumPlane1 = frustumPlanes[1].ToVector4();
-        _pushConstants.FrustumPlane2 = frustumPlanes[2].ToVector4();
-        _pushConstants.FrustumPlane3 = frustumPlanes[3].ToVector4();
-        _pushConstants.FrustumPlane4 = frustumPlanes[4].ToVector4();
-        _pushConstants.FrustumPlane5 = frustumPlanes[5].ToVector4();
     }
 
     private void CalcLodParameters(int mapRasterSizeX, int mapRasterSizeY)

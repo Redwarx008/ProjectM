@@ -60,8 +60,8 @@ public partial class Terrain : Node3D
     {
         base._Process(delta);
         Debug.Assert(_activeCamera != null);
-        //if (!_processor.Inited)
-        //    return;
+        if (!_processor.Inited)
+            return;
         _processor.Process(_activeCamera);
     }
 

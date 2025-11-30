@@ -5,7 +5,7 @@
 precision highp float;
 precision highp int;
 
-layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct InstancedParam
 {
@@ -57,32 +57,11 @@ layout(set = 0, binding = 3, std430) buffer PendingNodeSelectedList
 	NodeSelectedInfo data[];
 } pendingNodeList;
 
-
-
-layout (push_constant) uniform PushConstants
-{
-	vec4 frustumPlanes[6];
-};
-
-bool boxIntersect(vec3 centerPos, vec3 extent)
-{
-    for (uint i = 0; i < 6; ++i)
-    {
-        vec4 plane = frustumPlanes[i];
-        vec3 absNormal = abs(plane.xyz);
-        if ((dot(centerPos, plane.xyz) - dot(absNormal, extent)) > -plane.w)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 void main()
 {
 	uint index = gl_GlobalInvocationID.x;
-	atomicAdd(pendingNodeList.count, -1);
-	if (pendingNodeList.count < 0)
+	int counter = atomicAdd(pendingNodeList.count, -1);
+	if (counter <= 0)
 	{
 		return;
 	}

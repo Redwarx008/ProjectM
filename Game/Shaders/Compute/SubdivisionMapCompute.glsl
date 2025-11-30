@@ -3,7 +3,7 @@
 #extension GL_EXT_scalar_block_layout : enable
 
 
-layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout (set = 0, binding = 0, std430) uniform NodeDescriptorLocationInfo
 {
@@ -44,8 +44,8 @@ uint getNodeDescIndex(uvec2 nodeLocation, uint lod)
 void main()
 {
     uint index = gl_GlobalInvocationID.x;
-	atomicAdd(nodeSubdivisionInfos.count, -1);
-	if (nodeSubdivisionInfos.count < 0)
+	int counter = atomicAdd(nodeSubdivisionInfos.count, -1);
+	if (counter <= 0)
 	{
 		return;
 	}
