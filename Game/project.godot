@@ -1,0 +1,37 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="ProjectM"
+run/main_scene="uid://wpcif5lpxx1d"
+config/features=PackedStringArray("4.6", "C#", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+AutoLoad="*uid://cbfaq1fi22uk5"
+
+[debug]
+
+file_logging/log_path="user://logs/ProjectM.log"
+
+[dotnet]
+
+project/assembly_name="ProjectM"
+project/solution_directory=".."
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+driver/depth_prepass/enable=false

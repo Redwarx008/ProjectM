@@ -1,0 +1,16 @@
+
+# Godot-specific ignores
+.godot/
+.import/
+Game/vfs_cache.json
+export.cfg
+export_presets.cfg
+
+# Mono-specific ignores
+.mono/
+data_*/
+
+.vs/
+.idea/
+obj/
+bin/

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dq5broal2yfup"
+path="res://.godot/imported/SubdivisionMapCompute.glsl-f539d1283f443c9d2f7b9f6c8ff02a2d.res"
+
+[deps]
+
+source_file="res://Shaders/Compute/SubdivisionMapCompute.glsl"
+dest_files=["res://.godot/imported/SubdivisionMapCompute.glsl-f539d1283f443c9d2f7b9f6c8ff02a2d.res"]
+
+[params]
+

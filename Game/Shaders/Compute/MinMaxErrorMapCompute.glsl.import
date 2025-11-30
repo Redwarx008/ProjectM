@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://mqci0oh2b4ev"
+path="res://.godot/imported/MinMaxErrorMapCompute.glsl-058ad900779e4162428e82ba94fd24ce.res"
+
+[deps]
+
+source_file="res://Shaders/Compute/MinMaxErrorMapCompute.glsl"
+dest_files=["res://.godot/imported/MinMaxErrorMapCompute.glsl-058ad900779e4162428e82ba94fd24ce.res"]
+
+[params]
+

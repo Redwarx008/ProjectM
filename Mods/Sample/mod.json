@@ -1,0 +1,6 @@
+{
+    "Name" : "Sample",
+    "Version" : "1.0",
+    "Dependencies" : [],
+    "Override" : ["Map"]
+}

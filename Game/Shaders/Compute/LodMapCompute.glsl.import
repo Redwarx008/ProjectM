@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cr5fdfddcbhb4"
+path="res://.godot/imported/LodMapCompute.glsl-2047f2e93a510846f969bb73900947cb.res"
+
+[deps]
+
+source_file="res://Shaders/Compute/LodMapCompute.glsl"
+dest_files=["res://.godot/imported/LodMapCompute.glsl-2047f2e93a510846f969bb73900947cb.res"]
+
+[params]
+

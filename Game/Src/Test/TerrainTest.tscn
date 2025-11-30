@@ -1,0 +1,64 @@
+[gd_scene load_steps=7 format=3 uid="uid://wpcif5lpxx1d"]
+
+[ext_resource type="Script" uid="uid://cq4sbm2ilbr46" path="res://Src/Test/TerrainTest.cs" id="1_dk6pg"]
+[ext_resource type="Script" uid="uid://0hbbsjmxasnm" path="res://Src/Terrain/Terrain.cs" id="1_pvoya"]
+[ext_resource type="Script" uid="uid://c8yrlhg2dcql7" path="res://Src/Utils/FreeCameraControler.cs" id="2_pvoya"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_pvoya"]
+sky_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+ground_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+
+[sub_resource type="Sky" id="Sky_dk6pg"]
+sky_material = SubResource("ProceduralSkyMaterial_pvoya")
+
+[sub_resource type="Environment" id="Environment_n5624"]
+background_mode = 2
+sky = SubResource("Sky_dk6pg")
+tonemap_mode = 2
+glow_enabled = true
+
+[node name="TerrainTest" type="Node3D" unique_id=1923949649 node_paths=PackedStringArray("_fpsLabel", "_terrain")]
+script = ExtResource("1_dk6pg")
+_fpsLabel = NodePath("Control/Panel/FpsLabel")
+_terrain = NodePath("Terrain")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=436894603]
+transform = Transform3D(-0.8660254, -0.43301278, 0.25, 0, 0.49999997, 0.86602545, -0.50000006, 0.75, -0.43301266, 0, 0, 0)
+shadow_enabled = true
+directional_shadow_max_distance = 1.0
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1860821128]
+environment = SubResource("Environment_n5624")
+
+[node name="Control" type="Control" parent="." unique_id=182827140]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="Panel" type="Panel" parent="Control" unique_id=1601241379]
+layout_mode = 0
+offset_right = 264.0
+offset_bottom = 92.0
+
+[node name="Helper" type="Label" parent="Control/Panel" unique_id=1065127981]
+layout_mode = 0
+offset_right = 230.0
+offset_bottom = 23.0
+text = "Press F1 to switch draw mode"
+
+[node name="FpsLabel" type="Label" parent="Control/Panel" unique_id=1954948446]
+layout_mode = 0
+offset_top = 45.0
+offset_right = 86.0
+offset_bottom = 68.0
+text = " FPS: 145"
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=2053924107]
+transform = Transform3D(1, 0, 0, 0, 0.07247233, 0.9973704, 0, -0.9973704, 0.07247233, 3117.067, 100, 2313.5452)
+far = 10000.0
+script = ExtResource("2_pvoya")
+
+[node name="Terrain" type="Node3D" parent="." unique_id=458070647 node_paths=PackedStringArray("_activeCamera")]
+script = ExtResource("1_pvoya")
+_activeCamera = NodePath("../../../../../../../../../@Node3DEditor@10752/@HSplitContainer@10201/@HSplitContainer@10203/@VSplitContainer@10205/@Node3DEditorViewportContainer@10206/@Node3DEditorViewport@10255/@SubViewportContainer@10207/@SubViewport@10208/@Camera3D@10210")
