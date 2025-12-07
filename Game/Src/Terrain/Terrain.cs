@@ -21,6 +21,8 @@ public partial class Terrain : Node3D
 
     public uint PatchSize { get; set; } = 8;
 
+    public static readonly int MaxLodCount = 12;
+
     public float ViewPortWidth { get; private set; }
 
     private TerrainMesh? _planeMesh;
@@ -92,7 +94,7 @@ public partial class Terrain : Node3D
     {
         Debug.Assert(Material != null);
         Material.SetShaderParameter("u_heightScale", definition.TerrainHeightScale);
-        Material.SetShaderParameter("u_baseChunkSize", Constants.LeafNodeSize);
+        Material.SetShaderParameter("u_baseChunkSize", LeafNodeSize);
     }
 
     private void CreatePlaneMesh()

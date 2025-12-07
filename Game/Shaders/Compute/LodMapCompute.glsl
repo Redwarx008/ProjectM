@@ -8,8 +8,8 @@ layout (set = 0, binding = 0, r8) uniform image2D lodMap;
 
 layout (set = 0, binding = 1, std430) uniform NodeDescriptorLocationInfo
 {
-    uint nodeIndexOffsetPerLod[8];
-    uvec2 nodeCountPerLod[8];
+    uint nodeIndexOffsetPerLod[12];
+    uvec2 nodeCountPerLod[12];
 };
 
 struct NodeDescriptor

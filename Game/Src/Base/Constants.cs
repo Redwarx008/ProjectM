@@ -11,9 +11,6 @@ internal static class Constants
     #endregion
 
     #region Terrain
-    public static int PatchSize { get; } = 8;
-    public static int LeafNodeSize { get; } = 32;
-    public static int MaxLodLevel { get; } = 8;
     public static int MaxNodeInSelect { get; } = 200;
 
     #endregion

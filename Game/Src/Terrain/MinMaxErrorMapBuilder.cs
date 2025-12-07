@@ -38,6 +38,9 @@ public struct MinMaxErrorMap
 
 internal class MinMaxErrorMapBuilder
 {
+    private static int LeafNodeSize = 32;
+    private static int MaxLodLevel = 8;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct TerrainParams()
     {
@@ -49,7 +52,7 @@ internal class MinMaxErrorMapBuilder
     public static int CalcLodCount(int mapRasterSizeX, int mapRasterSizeY)
     {
         int minLength = Math.Min(mapRasterSizeX, mapRasterSizeY);
-        return (int)Math.Log2(minLength) - (int)Math.Log2(Constants.LeafNodeSize);
+        return (int)Math.Log2(minLength) - (int)Math.Log2(LeafNodeSize);
         // topNodeSize = (int)(Constants.ChunkSize * (int)Math.Pow(2, LodCount - 1));
         // _leafNodeCountX = (int)MathF.Ceiling((mapRasterSizeX - 1) / (float)Constants.ChunkSize);
         // _leafNodeCountY = (int)MathF.Ceiling((mapRasterSizeY - 1) / (float)Constants.ChunkSize);
@@ -105,11 +108,11 @@ internal class MinMaxErrorMapBuilder
         };
 
         // create minMaxErrorMap
-        int mipWidth = (width + 1) / Constants.LeafNodeSize;
-        int mipHeight = (height + 1) / Constants.LeafNodeSize;
+        int mipWidth = (width + 1) / LeafNodeSize;
+        int mipHeight = (height + 1) / LeafNodeSize;
         for (int lodLevel = 0; lodLevel < lodCount; lodLevel++)
         {
-            var minMaxErrorMapFormat = new GDTexture2DDesc()
+            var minMaxErrorMapFormat = new GDTextureDesc()
             {
                 Format = RenderingDevice.DataFormat.R32G32B32A32Sfloat,
                 Width = (uint)mipWidth,
@@ -125,7 +128,7 @@ internal class MinMaxErrorMapBuilder
             mipHeight = (mipHeight + 1) / 2;
         }
         // Fill the remaining slots.
-        for (int lodLevel = lodCount; lodLevel < Constants.MaxLodLevel; lodLevel++)
+        for (int lodLevel = lodCount; lodLevel < MaxLodLevel; lodLevel++)
         {
             minMaxErrorMapBinding.AddId(minMaxErrorMapTextures[0].Rid);
         }
@@ -135,8 +138,8 @@ internal class MinMaxErrorMapBuilder
         rd.ComputeListBindComputePipeline(computeList, pipeline);
         rd.ComputeListBindUniformSet(computeList, set, 0);
 
-        int lodWidth = (width + 1) / Constants.LeafNodeSize;
-        int lodHeight = (height + 1) / Constants.LeafNodeSize;
+        int lodWidth = (width + 1) / LeafNodeSize;
+        int lodHeight = (height + 1) / LeafNodeSize;
         for (int lod = 0; lod < lodCount; lod++)
         {
             ReadOnlySpan<byte> pushConstant = MemoryMarshal.Cast<uint, byte>([(uint)lod, 1u, 1u, 1u]);

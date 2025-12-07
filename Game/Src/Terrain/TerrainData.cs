@@ -39,6 +39,7 @@ public class TerrainData : IDisposable
 
     private void LoadTextures(MapDefinition definition)
     {
+        Debug.Assert(_material != null);
         DebugGridTexture = GD.Load<Texture2D>("res://EditorAssets/Textures/Grid_Gray_128x128.png");
         _material.SetShaderParameter("u_debugGridTexture", DebugGridTexture);
     }
@@ -66,7 +67,7 @@ public class TerrainData : IDisposable
         }
         
         // create heightmap
-        var heightmapFormat = new GDTexture2DDesc()
+        var heightmapFormat = new GDTextureDesc()
         {
             Format = RenderingDevice.DataFormat.R16Unorm,
             Width = (uint)width,

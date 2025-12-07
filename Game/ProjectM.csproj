@@ -16,7 +16,7 @@
 	</ItemGroup>
 	<ItemGroup>
 	  <None Include="Shaders\Compute\LodMapCompute.glsl" />
-	  <None Include="Shaders\Compute\SubdivisionMapCompute.glsl" />
+	  <None Include="Shaders\Compute\PageTableCompute.glsl" />
 	</ItemGroup>
 	<ItemGroup>
 	  <ProjectReference Include="..\Core\Core.csproj" />

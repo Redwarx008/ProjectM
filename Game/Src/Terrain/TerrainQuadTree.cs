@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -18,27 +18,16 @@ public class TerrainQuadTree
         public float MinHeight;
         public float MaxHeight;
         public uint LodLevel;
-        private uint _padding;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct NodeSubdivisionInfo
-    {
-        public uint X;
-        public uint Y;
         public uint Subdivided;
-        public uint LodLevel;
     }
 
     public ref struct SelectDesc
     {
-        public NodeSelectedInfo[] NodeSelectedInfos { get; init; }
-        public int NodeSelectedCount { get; set; }
-        public NodeSubdivisionInfo[] NodeSubdivisionInfos { get; init; }
-        public int NodeSubdivisionCount { get; set; }
-        public ReadOnlySpan<Plane> Planes { get; init; }
-        public Vector3 ViewerPos { get; init; }
-        public float TolerableError { get; init; }
+        public NodeSelectedInfo[] NodeSelectedInfos;
+        public int NodeSelectedCount;
+        public ReadOnlySpan<Plane> Planes;
+        public Vector3 ViewerPos;
+        public float TolerableError;
     }
 
     private float _kFactor;
@@ -101,12 +90,6 @@ public class TerrainQuadTree
                 MinHeight = minZ,
                 MaxHeight = maxZ,
                 LodLevel = (uint)lodLevel,
-            };
-            selectDesc.NodeSubdivisionInfos[selectDesc.NodeSubdivisionCount++] = new NodeSubdivisionInfo
-            {
-                X = (uint)nodeX,
-                Y = (uint)nodeY,
-                LodLevel = (uint)lodLevel,
                 Subdivided = 0,
             };
 
@@ -114,7 +97,7 @@ public class TerrainQuadTree
         }
         else
         {
-            selectDesc.NodeSubdivisionInfos[selectDesc.NodeSubdivisionCount++] = new NodeSubdivisionInfo
+            selectDesc.NodeSelectedInfos[selectDesc.NodeSelectedCount++] = new NodeSelectedInfo
             {
                 X = (uint)nodeX,
                 Y = (uint)nodeY,

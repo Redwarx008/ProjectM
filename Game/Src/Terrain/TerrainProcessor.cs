@@ -1,12 +1,12 @@
 using Godot;
+using ProjectM;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
-
+using System.Runtime.InteropServices.Marshalling;
 using NodeSelectedInfo = TerrainQuadTree.NodeSelectedInfo;
-using NodeSubdivisionInfo = TerrainQuadTree.NodeSubdivisionInfo;
 
 internal class TerrainProcessor : IDisposable
 {
@@ -33,14 +33,11 @@ internal class TerrainProcessor : IDisposable
 
     #endregion
 
-    #region Build SubdivisionMap Resource
+    #region NodeDescriptor Resource
     private GDBuffer _nodeDescriptorBuffer = null!;
     private GDBuffer _nodeDescriptorLocationInfoBuffer = null!;
-    private GDBuffer _nodeSubdividedInfoBuffer = null!;
 
-    private Rid _buildSubdivisionMapPipeline;
-    private Rid _buildSubdivisionMapSet0;
-    private Rid _buildSubdivisionMapShader;
+    private Rid _nodeDescriptorSet;
     #endregion
 
     private int _maxLodNodeX;
@@ -51,29 +48,26 @@ internal class TerrainProcessor : IDisposable
 
     private readonly Callable _cachedDispatchCallback;
 
+    private Terrain? _terrain;
+
     private TerrainQuadTree? _quadTree;
 
     private TerrainMesh? _planeMesh;
 
+    private VirtualTexture? _geometricVT; // height or normal
+
     private NodeSelectedInfo[] _nodeSelectedInfos => _backSelected;
-    private NodeSubdivisionInfo[] _nodeSubdivisionInfos => _backSubdivision;
 
     private NodeSelectedInfo[] _frontSelected = new NodeSelectedInfo[Constants.MaxNodeInSelect];
     private NodeSelectedInfo[] _backSelected = new NodeSelectedInfo[Constants.MaxNodeInSelect];
-
-
-    private NodeSubdivisionInfo[] _frontSubdivision = new NodeSubdivisionInfo[Constants.MaxNodeInSelect];
-    private NodeSubdivisionInfo[] _backSubdivision = new NodeSubdivisionInfo[Constants.MaxNodeInSelect];
 
     // 保护交换操作的锁（仅在主线程使用，但仍保守使用）
     private readonly object _bufferLock = new();
 
     // 渲染线程将在 callback 中读取这两个引用（volatile 保证引用的原子读取/写入可见性）
     private volatile NodeSelectedInfo[]? _dispatchSelected;
-    private volatile NodeSubdivisionInfo[]? _dispatchSubdivision;
 
     private volatile int _dispatchSelectedCount;
-    private volatile int _dispatchSubdivisionCount;
 
     public float TolerableError { get; set; }
 
@@ -81,52 +75,48 @@ internal class TerrainProcessor : IDisposable
 
     #region Data struct Definition
 
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    private struct TerrainParams
-    {
-        public uint HeightmapSizeX;
-        public uint HeightmapSizeY;
-        public float HeightScale;
-        public uint LeafNodeSize;
-    }
-    
     [StructLayout(LayoutKind.Sequential)]
     private struct NodeDescriptor
     {
         public uint Branch; // Indicates whether this quadtree node is divided
     }
 
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct TerrainParams
+    {
+        public uint LeafNodeSize;
+        private uint _padding0;
+        private uint _padding1;
+        private uint _padding2;
+    }
 
     #endregion
-
-
-
 
     public void Init(Terrain terrain, TerrainMesh? mesh, MapDefinition definition)
     {
         Debug.Assert(terrain.Data.Heightmap != null);
+        _terrain = terrain;
         _planeMesh = mesh;
-        CalcLodParameters((int)terrain.Data.Heightmap.Width, (int)terrain.Data.Heightmap.Height);
-        InitBuildSubdivisionMapPipeline();
+        CalcLodParameters((int)terrain.Data.Heightmap.Width, (int)terrain.Data.Heightmap.Height, (int)terrain.LeafNodeSize);
+        InitNodeDescriptorBuffer();
         InitBuildLodMapPipeline();
-        InitDrawPipeline(terrain, definition);
+        InitPipeline(terrain, definition);
         CreateQuadTree(terrain, definition);
         TolerableError = definition.TerrainTolerableError;
         Inited = true;
     }
+
     public TerrainProcessor()
     {
         _cachedDispatchCallback = Callable.From(() =>
         {
             // 渲染线程执行：读取 stable front
             var sel = _dispatchSelected;
-            var sub = _dispatchSubdivision;
             var selN = _dispatchSelectedCount;
-            var subN = _dispatchSubdivisionCount;
 
             // **永远只读，不写，不改数组内容**
-            if (sel != null && sub != null)
-                Dispatch(sel, selN, sub, subN);
+            if (sel != null)
+                Dispatch(sel, selN);
         });
     }
     public void Process(Camera3D camera)
@@ -137,20 +127,18 @@ internal class TerrainProcessor : IDisposable
         var selectDesc = new TerrainQuadTree.SelectDesc
         {
             NodeSelectedInfos = _nodeSelectedInfos,
-            NodeSubdivisionInfos = _nodeSubdivisionInfos,
             Planes = planes,
             ViewerPos = camera.GlobalPosition,
             TolerableError = TolerableError,
             NodeSelectedCount = 0,
-            NodeSubdivisionCount = 0,
         };
         _quadTree.Select(ref selectDesc);
 
-        SubmitForRender(selectDesc.NodeSelectedCount, selectDesc.NodeSubdivisionCount);
+        SubmitForRender(selectDesc.NodeSelectedCount);
     }
 
     // 交换并提交给渲染线程（仅在主线程调用）
-    private void SubmitForRender(int selectedCount, int subdivisionCount)
+    private void SubmitForRender(int selectedCount)
     {
         // 锁住交换 —— 确保可见性与原子性
         lock (_bufferLock)
@@ -158,21 +146,15 @@ internal class TerrainProcessor : IDisposable
             // 交换 Selected
             (_frontSelected, _backSelected) = (_backSelected, _frontSelected);
 
-            // 交换 Subdivision
-            (_frontSubdivision, _backSubdivision) = (_backSubdivision, _frontSubdivision);
-
             // 设置渲染线程可读的稳定 front 引用（volatile 写）
             _dispatchSelected = _frontSelected;
-            _dispatchSubdivision = _frontSubdivision;
             _dispatchSelectedCount = selectedCount;
-            _dispatchSubdivisionCount = subdivisionCount;
         }
 
         RenderingServer.CallOnRenderThread(_cachedDispatchCallback);
     }
     private void Dispatch(
-        NodeSelectedInfo[] selected, int selectedCount,
-        NodeSubdivisionInfo[] subdivision, int subdivisionCount)
+        NodeSelectedInfo[] selected, int selectedCount)
     {
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
@@ -185,13 +167,6 @@ internal class TerrainProcessor : IDisposable
             ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(selected.AsSpan(0, selectedCount));
             rd.BufferUpdate(_nodeSelectedInfoBuffer, 8, (uint)(sizeof(NodeSelectedInfo) * selectedCount), bytes);
         }
-        unsafe
-        {
-            ReadOnlySpan<byte> counterBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref subdivisionCount, sizeof(int)));
-            rd.BufferUpdate(_nodeSubdividedInfoBuffer, 0, sizeof(int), counterBytes);
-            ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(subdivision.AsSpan(0, subdivisionCount));
-            rd.BufferUpdate(_nodeSubdividedInfoBuffer, 8, (uint)(sizeof(NodeSubdivisionInfo) * subdivisionCount), bytes);
-        }
 
         // set draw info pass
         
@@ -200,17 +175,8 @@ internal class TerrainProcessor : IDisposable
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _computePipeline);
             rd.ComputeListBindUniformSet(computeList, _computeSet, 0);
+            rd.ComputeListBindUniformSet(computeList, _nodeDescriptorSet, 1);
             rd.ComputeListDispatch(computeList, (uint)(Math.Ceiling(selectedCount / 64f)), 1, 1);
-            rd.ComputeListEnd();
-        }
-
-        // build SubdivisionMap pass
-        if (subdivisionCount > 0)
-        {
-            var computeList = rd.ComputeListBegin();
-            rd.ComputeListBindComputePipeline(computeList, _buildSubdivisionMapPipeline);
-            rd.ComputeListBindUniformSet(computeList, _buildSubdivisionMapSet0, 0);
-            rd.ComputeListDispatch(computeList, (uint)(Math.Ceiling(subdivisionCount / 64f)), 1, 1);
             rd.ComputeListEnd();
         }
 
@@ -227,18 +193,18 @@ internal class TerrainProcessor : IDisposable
         }
     }
 
-    private void CalcLodParameters(int mapRasterSizeX, int mapRasterSizeY)
+    private void CalcLodParameters(int mapRasterSizeX, int mapRasterSizeY, int leafNodeSize)
     {
         int minLength = Math.Min(mapRasterSizeX, mapRasterSizeY);
-        _lodCount = (int)Math.Log2(minLength) - (int)Math.Log2(Constants.LeafNodeSize);
-        int topNodeSize = (int)(Constants.LeafNodeSize * (int)Math.Pow(2, _lodCount - 1));
+        _lodCount = (int)Math.Log2(minLength) - (int)Math.Log2(leafNodeSize);
+        int topNodeSize = (int)(leafNodeSize * (int)Math.Pow(2, _lodCount - 1));
         _maxLodNodeX = (int)Math.Ceiling(mapRasterSizeX / (float)topNodeSize);
         _maxLodNodeY = (int)Math.Ceiling(mapRasterSizeY / (float)topNodeSize);
-        _leafNodeX = (int)MathF.Ceiling((mapRasterSizeX - 1) / (float)Constants.LeafNodeSize);
-        _leafNodeY = (int)MathF.Ceiling((mapRasterSizeY - 1) / (float)Constants.LeafNodeSize);
+        _leafNodeX = (int)MathF.Ceiling((mapRasterSizeX - 1) / (float)leafNodeSize);
+        _leafNodeY = (int)MathF.Ceiling((mapRasterSizeY - 1) / (float)leafNodeSize);
     }
     
-    private void InitDrawPipeline(Terrain terrain, MapDefinition definition)
+    private void InitPipeline(Terrain terrain, MapDefinition definition)
     {   
         Debug.Assert(_planeMesh != null);
         Debug.Assert(terrain.Data.Heightmap != null);
@@ -255,18 +221,8 @@ internal class TerrainProcessor : IDisposable
 
         // create Buffers
 
-        uint nodeSelectedInfoBufferSize;
-        unsafe
-        {
-            nodeSelectedInfoBufferSize = (uint)(sizeof(int) + 4 + Constants.MaxNodeInSelect * sizeof(NodeSelectedInfo)); // counter + padding + [NodeSelectedInfo] * n
-        }
-        _nodeSelectedInfoBuffer = GDBuffer.CreateStorage(nodeSelectedInfoBufferSize);
-
         var terrainParams = new TerrainParams()
         {
-            HeightmapSizeX = heightmap.Width,
-            HeightmapSizeY = heightmap.Height,
-            HeightScale = definition.TerrainHeightScale,
             LeafNodeSize = terrain.LeafNodeSize,
         };
 
@@ -274,6 +230,13 @@ internal class TerrainProcessor : IDisposable
             ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref terrainParams, 1));
             _terrainParamsBuffer = GDBuffer.CreateUniform((uint)bytes.Length, bytes);
         }
+
+        uint nodeSelectedInfoBufferSize;
+        unsafe
+        {
+            nodeSelectedInfoBufferSize = (uint)(sizeof(int) + 4 + Constants.MaxNodeInSelect * sizeof(NodeSelectedInfo)); // counter + padding + [NodeSelectedInfo] * n
+        }
+        _nodeSelectedInfoBuffer = GDBuffer.CreateStorage(nodeSelectedInfoBufferSize);
 
         // create pipeline
         _computeShader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/TerrainCompute.glsl");
@@ -285,19 +248,19 @@ internal class TerrainProcessor : IDisposable
         };
         instancedParamsBinding.AddId(_instancedParamsBuffer);
 
-        var terrainParamsBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.UniformBuffer,
-            Binding = 1
-        };
-        terrainParamsBinding.AddId(_terrainParamsBuffer);
-
         var drawIndirectBufferBinding = new RDUniform()
         {
             UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 2
+            Binding = 1
         };
         drawIndirectBufferBinding.AddId(_drawIndirectBuffer);
+
+        var terrainParamsBinding = new RDUniform()
+        {
+            UniformType = RenderingDevice.UniformType.UniformBuffer,
+            Binding = 2
+        };
+        terrainParamsBinding.AddId(_terrainParamsBuffer);
 
         var nodeSelectedInfoBinding = new RDUniform()
         {
@@ -308,20 +271,41 @@ internal class TerrainProcessor : IDisposable
 
         _computeSet = rd.UniformSetCreate(
         [
-            instancedParamsBinding, terrainParamsBinding, drawIndirectBufferBinding, nodeSelectedInfoBinding
+            instancedParamsBinding, drawIndirectBufferBinding, terrainParamsBinding, nodeSelectedInfoBinding
         ], _computeShader, 0);
+
+        // create nodeDescriptorSet
+
+        var nodeDescriptorLocationInfoBinding = new RDUniform()
+        {
+            UniformType = RenderingDevice.UniformType.UniformBuffer,
+            Binding = 0
+        };
+        nodeDescriptorLocationInfoBinding.AddId(_nodeDescriptorLocationInfoBuffer);
+
+        var nodeDescriptorBufferBinding = new RDUniform()
+        {
+            UniformType = RenderingDevice.UniformType.StorageBuffer,
+            Binding = 1
+        };
+        nodeDescriptorBufferBinding.AddId(_nodeDescriptorBuffer);
+
+        _nodeDescriptorSet = rd.UniformSetCreate(
+            [
+                nodeDescriptorLocationInfoBinding, nodeDescriptorBufferBinding
+            ], _computeShader, 1);
 
         _computePipeline = rd.ComputePipelineCreate(_computeShader);
 
     }
 
-    private void InitBuildSubdivisionMapPipeline()
+    private void InitNodeDescriptorBuffer()
     {
         // build NodeDescriptorLocation buffer
-        var nodeIndexOffsetPerLod = new uint[Constants.MaxLodLevel];
-        var nodeCountPerLod = new uint[Constants.MaxLodLevel * 2];
+        var nodeIndexOffsetPerLod = new uint[Terrain.MaxLodCount];
+        var nodeCountPerLod = new uint[Terrain.MaxLodCount * 2];
         uint offset = 0;
-        for (int lod = _lodCount - 1; lod >= 0; --lod)
+        for (int lod = Terrain.MaxLodCount - 1; lod >= 0; --lod)
         {
             int nodeSize = 1 << lod;
             uint nodeCountX = (uint)MathF.Ceiling((float)_leafNodeX / (float)nodeSize);
@@ -343,47 +327,6 @@ internal class TerrainProcessor : IDisposable
         {
             _nodeDescriptorBuffer = GDBuffer.CreateStorage(offset * (uint)sizeof(NodeDescriptor));
         }
-
-        // build NodeSubdividedInfoBuffer
-        uint nodeSubdividedInfoBufferSize;
-        unsafe
-        {
-            nodeSubdividedInfoBufferSize = (uint)(sizeof(int) + 4 + Constants.MaxNodeInSelect * sizeof(NodeSubdivisionInfo));
-        }
-        _nodeSubdividedInfoBuffer = GDBuffer.CreateStorage(nodeSubdividedInfoBufferSize);
-
-        // create binding 
-        var nodeDescriptorLocationInfoBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.UniformBuffer,
-            Binding = 0
-        };
-        nodeDescriptorLocationInfoBinding.AddId(_nodeDescriptorLocationInfoBuffer);
-
-        var nodeDescriptorBufferBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 1
-        };
-        nodeDescriptorBufferBinding.AddId(_nodeDescriptorBuffer);
-
-        var nodeSubdividedInfoBufferBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 2
-        };
-        nodeSubdividedInfoBufferBinding.AddId(_nodeSubdividedInfoBuffer);
-
-        RenderingDevice rd = RenderingServer.GetRenderingDevice();
-
-        _buildSubdivisionMapShader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/SubdivisionMapCompute.glsl");
-
-        _buildSubdivisionMapPipeline = rd.ComputePipelineCreate(_buildSubdivisionMapShader);
-
-        _buildSubdivisionMapSet0 = rd.UniformSetCreate(
-            [
-                nodeDescriptorLocationInfoBinding, nodeDescriptorBufferBinding, nodeSubdividedInfoBufferBinding
-            ], _buildSubdivisionMapShader, 0);
     }
     
     private void InitBuildLodMapPipeline()
@@ -431,7 +374,7 @@ internal class TerrainProcessor : IDisposable
         Debug.Assert(_planeMesh != null && _planeMesh.Material != null);
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
-        var desc = new GDTexture2DDesc()
+        var desc = new GDTextureDesc()
         {
             Width = (uint)_leafNodeX,
             Height = (uint)_leafNodeY,
@@ -461,7 +404,6 @@ internal class TerrainProcessor : IDisposable
         _drawIndirectBuffer.Dispose();
 
         _nodeSelectedInfoBuffer.Dispose();
-        _terrainParamsBuffer.Dispose();
         
         _nodeDescriptorLocationInfoBuffer.Dispose();
         _nodeDescriptorBuffer.Dispose();
@@ -475,7 +417,38 @@ internal class TerrainProcessor : IDisposable
         rd.FreeRid(_computeShader);
         rd.FreeRid(_buildLodMapPipeline);
         rd.FreeRid(_buildLodMapShader);
-        rd.FreeRid(_buildSubdivisionMapPipeline);
-        rd.FreeRid(_buildSubdivisionMapShader);
     }
+
+    #region Process Virtual Texture
+    private void RequestPageForNode(int lod, int nodeX, int nodeY)
+    {
+        int lodOffset = CalcLodOffsetToMip(_geometricVT.PageSizeWithoutPadding, (int)_terrain.LeafNodeSize);
+        int pageMip = Math.Max(lod - lodOffset, 0);
+        int nodeSize = (int)_terrain.LeafNodeSize << lod;
+        int x = nodeX * nodeSize;
+        int y = nodeY * nodeSize;
+        int pageSizeInL0Raster = _geometricVT.PageSizeWithoutPadding << pageMip;
+        int pageX = x / pageSizeInL0Raster;
+        int pageY = y / pageSizeInL0Raster;
+        var id = new VirtualPageID()
+        {
+            x = pageX,
+            y = pageY,
+            mip = pageMip,
+        };
+        _geometricVT.RequestPage(id);
+    }
+
+    private static int CalcLodOffsetToMip(int pageSize, int leafNodeSize)
+    {
+        int lodOffsetToMip = 0;
+        while (leafNodeSize < pageSize)
+        {
+            leafNodeSize *= 2;
+            ++lodOffsetToMip;
+        }
+        return lodOffsetToMip;
+    }
+
+    #endregion
 }
