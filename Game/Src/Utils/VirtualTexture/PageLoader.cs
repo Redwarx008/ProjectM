@@ -31,6 +31,8 @@ internal class PageLoader : IDisposable
 
     private VTHeader _header;
 
+    public string FilePath { get; init; }
+
     // 每一层 Mip 在文件中的起始字节偏移量
     private long[]? _mipLevelFileOffsets;
 
@@ -49,6 +51,7 @@ internal class PageLoader : IDisposable
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"VT file not found: {filePath}");
 
+        FilePath = filePath;
         _fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
         ReadHeaderAndPrecalculateOffsets();

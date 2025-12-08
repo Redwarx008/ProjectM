@@ -6,10 +6,10 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout (set = 0, binding = 0, r8) uniform image2D lodMap;
 
-layout (set = 0, binding = 1, std430) uniform NodeDescriptorLocationInfo
+layout (set = 1, binding = 0, std430) buffer NodeDescriptorLocationInfo
 {
-    uint nodeIndexOffsetPerLod[12];
-    uvec2 nodeCountPerLod[12];
+    uint nodeIndexOffsetPerLod[10];
+    uvec2 nodeCountPerLod[10];
 };
 
 struct NodeDescriptor
@@ -17,7 +17,7 @@ struct NodeDescriptor
     uint subdivided;
 };
 
-layout (set = 0, binding = 2, std430) buffer NodeDescriptorBuffer
+layout (set = 1, binding = 1, std430) buffer NodeDescriptorBuffer
 {
     NodeDescriptor nodeDescriptors[];
 };

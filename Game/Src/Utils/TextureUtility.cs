@@ -28,7 +28,7 @@ public class GDTexture2D : IDisposable
     /// <summary>
     /// Should be called on render thread.
     /// </summary>
-    public static GDTexture2D Create(in GDTextureDesc desc, ReadOnlySpan<byte> data)
+    public static GDTexture2D Create(in GDTextureDesc desc, byte[] data)
     {
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
         var format = new RDTextureFormat()
@@ -44,7 +44,7 @@ public class GDTexture2D : IDisposable
         };
         var texture = new GDTexture2D()
         {
-            Rid = rd.TextureCreate(format, new RDTextureView(), [data.ToArray()]),
+            Rid = rd.TextureCreate(format, new RDTextureView(), [data]),
             Width = format.Width,
             Height = format.Height,
             Mipmaps = format.Mipmaps,

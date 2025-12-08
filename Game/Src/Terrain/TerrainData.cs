@@ -16,6 +16,9 @@ public class TerrainData : IDisposable
 
     public MinMaxErrorMap[]? MinMaxErrorMaps { get; private set; }
 
+    public int GeometricWidth { get; private set; }
+    public int GeometricHeight { get; private set; }
+
     private ShaderMaterial? _material;
 
     public TerrainData(Terrain terrain)
@@ -28,13 +31,23 @@ public class TerrainData : IDisposable
     /// </summary>
     public void Load(MapDefinition definition)
     {
-        LoadHeightmap(definition);
-        LoadTextures(definition);
+        LoadHeightmap(definition, out int width, out int height, out byte[]? data);
+        GeometricWidth = width;
+        GeometricHeight = height;
+        Debug.Assert(data != null);
+        RenderingServer.CallOnRenderThread(Callable.From(() =>
+        {
+            CreateHeightmapTexture(width, height, data);
+            LoadTextures(definition);
+        }));
     }
     
     public void Dispose()
     {
-        Heightmap!.Dispose();
+        RenderingServer.CallOnRenderThread(Callable.From(() =>
+        {
+            Heightmap?.Dispose();
+        }));
     }
 
     private void LoadTextures(MapDefinition definition)
@@ -43,38 +56,44 @@ public class TerrainData : IDisposable
         DebugGridTexture = GD.Load<Texture2D>("res://EditorAssets/Textures/Grid_Gray_128x128.png");
         _material.SetShaderParameter("u_debugGridTexture", DebugGridTexture);
     }
-    private void LoadHeightmap(MapDefinition definition)
+    private void LoadHeightmap(MapDefinition definition, out int width, out int height, out byte[]? data)
     {
         string? heightmapFile = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.png");
         if (!File.Exists(heightmapFile))
         {
             Logger.Error($"Can't find heightmap file at {heightmapFile}.");
+            width = 0;
+            height = 0;
+            data = null;
             return;
         }
 
         using var stream = File.OpenRead(heightmapFile);
 
-        int width;
-        int height;
+        int _width;
+        int _height;
         var stbiContext = new StbImageSharp.StbImage.stbi__context(stream);
-        ReadOnlySpan<byte> data;
+        ReadOnlySpan<byte> _data;
         unsafe
         {
             int channels;
-            ushort* buffer = StbImageSharp.StbImage.stbi__load_and_postprocess_16bit(stbiContext, &width, &height, &channels, 1);
-            ReadOnlySpan<ushort> bufferSpan = new Span<ushort>(buffer, width * height * channels);
-            data = MemoryMarshal.AsBytes(bufferSpan);
+            ushort* buffer = StbImageSharp.StbImage.stbi__load_and_postprocess_16bit(stbiContext, &_width, &_height, &channels, 1);
+            ReadOnlySpan<ushort> bufferSpan = new Span<ushort>(buffer, _width * _height * channels);
+            _data = MemoryMarshal.AsBytes(bufferSpan);
         }
-        
-        // create heightmap
+        width = _width; height = _height; data = _data.ToArray();
+    }
+
+    private void CreateHeightmapTexture(int width, int height, byte[] data)
+    {
         var heightmapFormat = new GDTextureDesc()
         {
             Format = RenderingDevice.DataFormat.R16Unorm,
             Width = (uint)width,
             Height = (uint)height,
             Mipmaps = 1,
-            UsageBits = RenderingDevice.TextureUsageBits.CanUpdateBit | 
-                        RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.CanCopyFromBit
+            UsageBits = RenderingDevice.TextureUsageBits.CanUpdateBit |
+                RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.CanCopyFromBit
         };
         Heightmap = GDTexture2D.Create(heightmapFormat, data);
 

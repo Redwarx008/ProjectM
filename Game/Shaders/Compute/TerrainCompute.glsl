@@ -53,10 +53,10 @@ layout(set = 0, binding = 3, std430) buffer PendingNodeSelectedList
 } pendingNodeList;
 
 
-layout (set = 1, binding = 0, std430) uniform NodeDescriptorLocationInfo
+layout (set = 1, binding = 0, std430) buffer NodeDescriptorLocationInfo
 {
-	uint nodeIndexOffsetPerLod[12];
-	uvec2 nodeCountPerLod[12];
+	uint nodeIndexOffsetPerLod[10];
+	uvec2 nodeCountPerLod[10];
 };
 
 struct NodeDescriptor

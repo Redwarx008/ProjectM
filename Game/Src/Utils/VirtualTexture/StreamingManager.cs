@@ -2,6 +2,7 @@ using Core;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -9,6 +10,14 @@ using System.Threading.Tasks;
 
 namespace ProjectM;
 
+internal struct VTInfo
+{
+    public int width;
+    public int height;
+    public int tileSize;
+    public int padding;
+    public int mipmaps;
+}
 internal class StreamingManager : IDisposable
 {
     // 文件路径 -> 加载器实例
@@ -39,6 +48,31 @@ internal class StreamingManager : IDisposable
     public void RequestPage(VirtualPageID id)
     {
         _requestQueue.Add(id);
+    }
+
+    public VTInfo GetVTInfo()
+    {
+        Debug.Assert(_loaders.Count > 0);
+        for (int i = 1; i < _loaders.Count; ++i)
+        {
+            if (_loaders[i].Header.Width != _loaders[i - 1].Header.Width || _loaders[i].Header.Height != _loaders[i - 1].Header.Height)
+            {
+                Logger.Error($"[VT] : The width or height of virtual texture ({_loaders[i].FilePath}) are different from virtual texture ({_loaders[i - 1].FilePath}).\r\n");
+            }
+
+            if (_loaders[i].Header.Mipmaps != _loaders[i - 1].Header.Mipmaps)
+            {
+                Logger.Error($"[VT] : The mipmaps virtual texture ({_loaders[i].FilePath}) are different from virtual texture ({_loaders[i - 1].FilePath}).\r\n");
+            }
+        }
+        return new VTInfo()
+        {
+            width = _loaders[0].Header.Width,
+            height = _loaders[0].Header.Height,
+            tileSize = _loaders[0].Header.TileSize,
+            mipmaps = _loaders[0].Header.Mipmaps,
+            padding = _loaders[0].Header.Padding,
+        };
     }
 
     private void IOThreadLoop()

@@ -17,9 +17,10 @@ internal class PhysicalTexture : IDisposable
 
     private int _reservedCount;
 
-    public PhysicalTexture(uint maxPageCount, int reservedCount, VirtualTextureDesc[] vtDescs)
+    public PhysicalTexture(uint maxPageCount, int reservedCount, VTInfo vTInfo, VirtualTextureDesc[] vtDescs)
     {
-        int pageSize = (int)vtDescs[0].pageSize;
+        int vTCount = vtDescs.Length;
+        int pageSize = vTInfo.tileSize;
         int dynamicCapacity = (int)(maxPageCount - reservedCount);
         if (dynamicCapacity <= 0)
             throw new ArgumentException("Total capacity must be greater than reserved count.");
@@ -29,19 +30,18 @@ internal class PhysicalTexture : IDisposable
             _freeSlots.Add(reservedCount + i);
         }
         _reservedCount = reservedCount;
-        _textures = new GDTexture2DArray[vtDescs.Length];
+        _textures = new GDTexture2DArray[vTCount];
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            for (int i = 0; i < vtDescs.Length; ++i)
+            for (int i = 0; i < vTCount; ++i)
             {
-                Debug.Assert(i > 1 && vtDescs[i].mipCount == vtDescs[i - 1].mipCount);
                 var desc = new GDTextureDesc()
                 {
                     Format = vtDescs[i].format,
-                    Width = (uint)(pageSize + 2 * vtDescs[i].padding),
-                    Height = (uint)(pageSize + 2 * vtDescs[i].padding),
+                    Width = (uint)(pageSize + 2 * vTInfo.padding),
+                    Height = (uint)(pageSize + 2 * vTInfo.padding),
                     LayerCount = maxPageCount,
-                    Mipmaps = vtDescs[i].mipCount,
+                    Mipmaps = (uint)vTInfo.mipmaps,
                     UsageBits = RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.CanUpdateBit |
                     RenderingDevice.TextureUsageBits.CanCopyToBit | RenderingDevice.TextureUsageBits.CanCopyFromBit,
                 };

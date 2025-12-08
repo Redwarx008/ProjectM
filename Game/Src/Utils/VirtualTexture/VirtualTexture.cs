@@ -45,12 +45,6 @@ public class VirtualTexture : IDisposable
     }
     public struct VirtualTextureDesc
     {
-        public PageSize pageSize;
-
-        public uint padding;
-
-        public uint mipCount;
-
         public RenderingDevice.DataFormat format;
 
         public string filePath;
@@ -58,11 +52,12 @@ public class VirtualTexture : IDisposable
 
     public int MipCount { get; init; } 
 
-    public int PageSizeWithoutPadding { get; init; }
+    public int TileSize { get; init; }
 
     public int MaxPageCount { get; init; }
 
-    public Vector2I L0Size { get; init; }
+    public int Width { get; init; }
+    public int Height { get; init; }
 
     private PageTable _pageTable;
     private PhysicalTexture _physicalTexture;
@@ -70,21 +65,23 @@ public class VirtualTexture : IDisposable
 
     private int _loadedPersistentCount = 0;
 
-    public VirtualTexture(uint maxPageCount, Vector2I virtualTextureSize, VirtualTextureDesc[] vtDescs)
+    public VirtualTexture(uint maxPageCount, VirtualTextureDesc[] vtDescs)
     {
         Debug.Assert(maxPageCount <= 2048);
-        int pageSize = (int)vtDescs[0].pageSize;
-        MaxPageCount = (int)maxPageCount;
-        MipCount = (int)vtDescs[0].mipCount;
-        L0Size = virtualTextureSize;
-        PageSizeWithoutPadding = pageSize;
-        _pageTable = new PageTable(virtualTextureSize.X, virtualTextureSize.Y, pageSize, (int)maxPageCount, MipCount);
-        _physicalTexture = new PhysicalTexture(maxPageCount, (int)(maxPageCount - _pageTable.DynamicPageOffset), vtDescs);
         _streamer = new StreamingManager();
-        for(int i = 0; i < vtDescs.Length; ++i)
+        for (int i = 0; i < vtDescs.Length; ++i)
         {
             _streamer.RegisterFile(vtDescs[i].filePath);
         }
+        var vTInfo = _streamer.GetVTInfo();
+        MaxPageCount = (int)maxPageCount;
+        MipCount = vTInfo.mipmaps;
+        Width = vTInfo.width;
+        Height = vTInfo.height;
+        TileSize = vTInfo.tileSize;
+        _pageTable = new PageTable(Width, Height, TileSize, (int)maxPageCount, MipCount);
+        _physicalTexture = new PhysicalTexture(maxPageCount, (int)(maxPageCount - _pageTable.DynamicPageOffset), vTInfo, vtDescs);
+
         LoadResidentPages();
     }
 

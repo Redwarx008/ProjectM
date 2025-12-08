@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 [Tool]
 public partial class Terrain : Node3D
 {
-    private TerrainProcessor _processor =  new();
+    private TerrainProcessor? _processor;
     [Export]
     private Camera3D? _activeCamera;
 
@@ -21,7 +21,7 @@ public partial class Terrain : Node3D
 
     public uint PatchSize { get; set; } = 8;
 
-    public static readonly int MaxLodCount = 12;
+    public static readonly int MaxLodCount = 10;
 
     public float ViewPortWidth { get; private set; }
 
@@ -62,7 +62,7 @@ public partial class Terrain : Node3D
     {
         base._Process(delta);
         Debug.Assert(_activeCamera != null);
-        if (!_processor.Inited)
+        if (_processor == null || !_processor.Inited)
             return;
         _processor.Process(_activeCamera);
     }
@@ -71,23 +71,16 @@ public partial class Terrain : Node3D
     {
         base._ExitTree();
         _planeMesh?.Dispose();
-        RenderingServer.CallOnRenderThread(Callable.From(() =>
-        {
-            Data.Dispose();
-            _processor.Dispose();
-        }));
+        Data.Dispose();
+        _processor?.Dispose();
     }
 
     public void Init(MapDefinition definition)
     {
         Data.LoadMinMaxErrorMaps();
         InitMaterialParameters(definition);
-        RenderingServer.CallOnRenderThread(Callable.From(() =>
-        {
-            Data.Load(definition);
-            Debug.Assert(Data.Heightmap != null);
-            _processor.Init(this, _planeMesh, definition);
-        }));
+        Data.Load(definition);
+        _processor = new TerrainProcessor(this, _planeMesh, definition);
     }
 
     private void InitMaterialParameters(MapDefinition definition)

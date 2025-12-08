@@ -92,22 +92,13 @@ internal class TerrainProcessor : IDisposable
 
     #endregion
 
-    public void Init(Terrain terrain, TerrainMesh? mesh, MapDefinition definition)
+    public TerrainProcessor(Terrain terrain, TerrainMesh? mesh, MapDefinition definition)
     {
-        Debug.Assert(terrain.Data.Heightmap != null);
         _terrain = terrain;
         _planeMesh = mesh;
-        CalcLodParameters((int)terrain.Data.Heightmap.Width, (int)terrain.Data.Heightmap.Height, (int)terrain.LeafNodeSize);
-        InitNodeDescriptorBuffer();
-        InitBuildLodMapPipeline();
-        InitPipeline(terrain, definition);
+        CalcLodParameters(terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, (int)terrain.LeafNodeSize);
         CreateQuadTree(terrain, definition);
         TolerableError = definition.TerrainTolerableError;
-        Inited = true;
-    }
-
-    public TerrainProcessor()
-    {
         _cachedDispatchCallback = Callable.From(() =>
         {
             // 渲染线程执行：读取 stable front
@@ -118,6 +109,13 @@ internal class TerrainProcessor : IDisposable
             if (sel != null)
                 Dispatch(sel, selN);
         });
+        RenderingServer.CallOnRenderThread(Callable.From(() =>
+        {
+            InitNodeDescriptorBuffer();
+            InitBuildLodMapPipeline();
+            InitPipeline(terrain, definition);
+            Inited = true;
+        }));
     }
     public void Process(Camera3D camera)
     {
@@ -185,6 +183,7 @@ internal class TerrainProcessor : IDisposable
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _buildLodMapPipeline);
             rd.ComputeListBindUniformSet(computeList, _buildLodMapSet0, 0);
+            rd.ComputeListBindUniformSet(computeList, _nodeDescriptorSet, 1);
             ReadOnlySpan<byte> pushConstantBytes = MemoryMarshal.AsBytes<int>([_lodCount, 0, 0, 0]);
             rd.ComputeListSetPushConstant(computeList, pushConstantBytes, (uint)pushConstantBytes.Length);
             uint nDisPatch = (uint)Math.Ceiling(_leafNodeX / 8f);
@@ -278,7 +277,7 @@ internal class TerrainProcessor : IDisposable
 
         var nodeDescriptorLocationInfoBinding = new RDUniform()
         {
-            UniformType = RenderingDevice.UniformType.UniformBuffer,
+            UniformType = RenderingDevice.UniformType.StorageBuffer,
             Binding = 0
         };
         nodeDescriptorLocationInfoBinding.AddId(_nodeDescriptorLocationInfoBuffer);
@@ -321,7 +320,7 @@ internal class TerrainProcessor : IDisposable
         Array.Copy(nodeIndexOffsetPerLod, 0, data, 0, nodeIndexOffsetPerLod.Length);
         Array.Copy(nodeCountPerLod, 0, data, nodeIndexOffsetPerLod.Length, nodeCountPerLod.Length);
         ReadOnlySpan<byte> dataBytes = MemoryMarshal.AsBytes<uint>(data);
-        _nodeDescriptorLocationInfoBuffer = GDBuffer.CreateUniform((uint)dataBytes.Length, dataBytes);
+        _nodeDescriptorLocationInfoBuffer = GDBuffer.CreateStorage((uint)dataBytes.Length, dataBytes);
 
         unsafe
         {
@@ -342,19 +341,6 @@ internal class TerrainProcessor : IDisposable
         };
         lodMapBinding.AddId(LodMap!.Rid);
 
-        var nodeDescriptorLocationInfoBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.UniformBuffer,
-            Binding = 1
-        };
-        nodeDescriptorLocationInfoBinding.AddId(_nodeDescriptorLocationInfoBuffer);
-
-        var nodeDescriptorBufferBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 2
-        };
-        nodeDescriptorBufferBinding.AddId(_nodeDescriptorBuffer);
 
         _buildLodMapShader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/LodMapCompute.glsl");
         Debug.Assert(_buildLodMapShader != Constants.NullRid);
@@ -362,7 +348,7 @@ internal class TerrainProcessor : IDisposable
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
         _buildLodMapSet0 =
-            rd.UniformSetCreate([lodMapBinding, nodeDescriptorLocationInfoBinding, nodeDescriptorBufferBinding],
+            rd.UniformSetCreate([lodMapBinding],
                 _buildLodMapShader, 0);
         Debug.Assert(_buildLodMapSet0 != Constants.NullRid);
 
@@ -401,33 +387,36 @@ internal class TerrainProcessor : IDisposable
 
     public void Dispose()
     {
-        _drawIndirectBuffer.Dispose();
-
-        _nodeSelectedInfoBuffer.Dispose();
-        
-        _nodeDescriptorLocationInfoBuffer.Dispose();
-        _nodeDescriptorBuffer.Dispose();
-        if (LodMap != null)
+        RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            LodMap.Dispose();
-        }
+            _drawIndirectBuffer.Dispose();
 
-        RenderingDevice rd = RenderingServer.GetRenderingDevice();
-        rd.FreeRid(_computePipeline);
-        rd.FreeRid(_computeShader);
-        rd.FreeRid(_buildLodMapPipeline);
-        rd.FreeRid(_buildLodMapShader);
+            _nodeSelectedInfoBuffer.Dispose();
+
+            _nodeDescriptorLocationInfoBuffer.Dispose();
+            _nodeDescriptorBuffer.Dispose();
+            if (LodMap != null)
+            {
+                LodMap.Dispose();
+            }
+
+            RenderingDevice rd = RenderingServer.GetRenderingDevice();
+            rd.FreeRid(_computePipeline);
+            rd.FreeRid(_computeShader);
+            rd.FreeRid(_buildLodMapPipeline);
+            rd.FreeRid(_buildLodMapShader);
+        }));
     }
 
     #region Process Virtual Texture
     private void RequestPageForNode(int lod, int nodeX, int nodeY)
     {
-        int lodOffset = CalcLodOffsetToMip(_geometricVT.PageSizeWithoutPadding, (int)_terrain.LeafNodeSize);
+        int lodOffset = CalcLodOffsetToMip(_geometricVT.TileSize, (int)_terrain.LeafNodeSize);
         int pageMip = Math.Max(lod - lodOffset, 0);
         int nodeSize = (int)_terrain.LeafNodeSize << lod;
         int x = nodeX * nodeSize;
         int y = nodeY * nodeSize;
-        int pageSizeInL0Raster = _geometricVT.PageSizeWithoutPadding << pageMip;
+        int pageSizeInL0Raster = _geometricVT.TileSize << pageMip;
         int pageX = x / pageSizeInL0Raster;
         int pageY = y / pageSizeInL0Raster;
         var id = new VirtualPageID()
