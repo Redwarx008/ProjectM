@@ -17,19 +17,21 @@ internal class PhysicalTexture : IDisposable
 
     private int _reservedCount;
 
-    public PhysicalTexture(uint maxPageCount, int reservedCount, VTInfo vTInfo, VirtualTextureDesc[] vtDescs)
+    public GDTexture2DArray this[int i] => _textures[i];
+
+    public PhysicalTexture(uint maxPageCount, int reservedSlotCount, VTInfo vTInfo, VirtualTextureDesc[] vtDescs)
     {
         int vTCount = vtDescs.Length;
         int pageSize = vTInfo.tileSize;
-        int dynamicCapacity = (int)(maxPageCount - reservedCount);
+        int dynamicCapacity = (int)(maxPageCount - reservedSlotCount);
         if (dynamicCapacity <= 0)
             throw new ArgumentException("Total capacity must be greater than reserved count.");
         _freeSlots = new List<int>(dynamicCapacity);
         for(int i = 0; i < dynamicCapacity; ++i)
         {
-            _freeSlots.Add(reservedCount + i);
+            _freeSlots.Add(reservedSlotCount + i);
         }
-        _reservedCount = reservedCount;
+        _reservedCount = reservedSlotCount;
         _textures = new GDTexture2DArray[vTCount];
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
@@ -41,7 +43,7 @@ internal class PhysicalTexture : IDisposable
                     Width = (uint)(pageSize + 2 * vTInfo.padding),
                     Height = (uint)(pageSize + 2 * vTInfo.padding),
                     LayerCount = maxPageCount,
-                    Mipmaps = (uint)vTInfo.mipmaps,
+                    Mipmaps = 1,
                     UsageBits = RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.CanUpdateBit |
                     RenderingDevice.TextureUsageBits.CanCopyToBit | RenderingDevice.TextureUsageBits.CanCopyFromBit,
                 };
@@ -72,7 +74,7 @@ internal class PhysicalTexture : IDisposable
 
     public void Upload(int texture, int slot, byte[] data)
     {
-        Debug.Assert(texture > 0 && texture < _textures.Length);
+        Debug.Assert(texture >= 0 && texture < _textures.Length);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             var rd = RenderingServer.GetRenderingDevice();

@@ -33,8 +33,6 @@ environment = SubResource("Environment_n5624")
 [node name="Control" type="Control" parent="." unique_id=182827140]
 layout_mode = 3
 anchors_preset = 0
-offset_right = 40.0
-offset_bottom = 40.0
 
 [node name="Panel" type="Panel" parent="Control" unique_id=1601241379]
 layout_mode = 0
@@ -52,7 +50,7 @@ layout_mode = 0
 offset_top = 45.0
 offset_right = 86.0
 offset_bottom = 68.0
-text = " FPS: 145"
+text = " FPS: 140"
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=2053924107]
 transform = Transform3D(1, 0, 0, 0, 0.07247233, 0.9973704, 0, -0.9973704, 0.07247233, 3117.067, 100, 2313.5452)

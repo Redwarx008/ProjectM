@@ -3,10 +3,22 @@ render_mode depth_draw_always;
 
 uniform float u_heightScale;
 uniform int u_baseChunkSize;
+
 uniform uvec2 u_heightmapSize;
 
 uniform mat4 u_terrainInverseTransform;
 uniform mat3 u_inverseTransposedTransform;
+
+//Indirection Texture
+//format: rg32f
+//r: Physical Layer Index
+//g: Active LOD
+uniform usampler2D u_VTPageTable[8] : filter_nearest, repeat_disable;
+// Array Layer = Physical Slot Index
+uniform sampler2DArray u_VTPhysicalHeightmap : repeat_disable;
+
+uniform int u_PagePadding;
+uniform int u_HeightmapLodOffset;
 
 uniform sampler2D u_heightmap : repeat_disable;
 uniform sampler2D u_lodmap;
@@ -16,7 +28,42 @@ uniform sampler2DArray u_groundNormalArray ;
 
 uniform sampler2D u_debugGridTexture : source_color;
 
-varying vec3 v_debugColor;
+varying vec4 v_debugColor;
+
+varying flat int v_RequestHeightMip;
+
+float SampleHeightVT(vec2 globalUv, int requestMip)
+{
+	uvec4 pageInfo = textureLod(u_VTPageTable[requestMip], globalUv, 0);
+
+	uint physSlot = pageInfo.x;
+	uint activeLod = pageInfo.y;
+	// 当前 Active LOD 下，整个地形被切分为 gridDimX * gridDimY 个页面
+
+	ivec2 gridDim = textureSize(u_VTPageTable[activeLod], 0);
+	vec2 uvInPage = fract(globalUv * vec2(gridDim));
+	vec2 paddedPageSize = vec2(textureSize(u_VTPhysicalHeightmap, 0).xy);
+	vec2 pageSize = paddedPageSize - vec2(1.0);
+	// 算出在Physical纹理上的像素坐标 (加上左上角的 Padding)
+	vec2 pixelCoord = vec2(float(u_PagePadding)) + uvInPage * pageSize;
+	vec2 physUv = pixelCoord / paddedPageSize;
+	return texture(u_VTPhysicalHeightmap, vec3(physUv, float(physSlot))).r * u_heightScale;
+}
+
+vec3 CalculateNormalVT(vec2 uv, int requestMip)
+{
+    // 计算采样步长 (1个像素)
+    vec2 texelSize = 1.0 / vec2(u_heightmapSize);
+
+    // 使用 SampleHeightVT 替代 textureLod
+    // 请求 Mip 0 以获得最精细的法线细节
+    float left  = SampleHeightVT(uv + vec2(-texelSize.x, 0), requestMip) * u_heightScale;
+    float right = SampleHeightVT(uv + vec2(texelSize.x, 0), requestMip) * u_heightScale;
+    float up    = SampleHeightVT(uv + vec2(0, -texelSize.y), requestMip) * u_heightScale;
+    float down  = SampleHeightVT(uv + vec2(0, texelSize.y), requestMip) * u_heightScale;
+
+    return normalize(vec3(left - right, 2.0, up - down));
+}
 
 int GetBlockLod(ivec2 index)
 {
@@ -58,7 +105,7 @@ void FixSeams(vec2 vertexWorldPos, inout vec3 vertex, inout vec2 uv, int blockSi
 		//color = vec4(1, 1, 1, 1);  //white
 
 	int blockStride = 1 << level;
-	vec2 uvStride = float(blockStride) / vec2(textureSize(u_heightmap, 0));
+	vec2 uvStride = float(blockStride) / vec2(u_heightmapSize);
 	//int blockStrideCount = u_blockSize / blockStride;
 	ivec2 vertexIndex = ivec2(floor(vertex.xz + vec2(0.01, 0.01))) / ivec2(blockStride, blockStride);
 	int levelDiff = leftLevel - level;
@@ -128,6 +175,7 @@ vec3 CalculateNormal(vec2 uv)
 	return normalize(vec3(left - right, 2.0, up - down));
 }
 
+
 void vertex()
 {
 	int lodLevel = int(INSTANCE_CUSTOM.x);
@@ -147,7 +195,27 @@ void vertex()
 	worldSpacePos = (MODEL_MATRIX * vec4(VERTEX, 1)).xyz;
 	worldSpacePos.xz = min(worldSpacePos.xz, vec2(u_heightmapSize) - vec2(1.0, 1.0));
 
-	float height = textureLod(u_heightmap, worldSpacePos.xz / vec2(u_heightmapSize), 0).r * u_heightScale;
+	uvec4 pageInfo = textureLod(u_VTPageTable[0], worldSpacePos.xz / vec2(u_heightmapSize), 0);
+
+	uint physSlot = pageInfo.x;
+	uint activeLod = pageInfo.y;
+		//float debug;
+	if(activeLod == 0u)
+		v_debugColor = vec4(1, 0, 0, 1);  //red
+	else if(activeLod == 1u)
+		v_debugColor = vec4(0, 1, 0, 1);  //green
+	else if(activeLod == 2u)
+		v_debugColor = vec4(0, 0, 1, 1);  //blue
+	else if(activeLod == 3u)
+		v_debugColor = vec4(1, 0, 1, 1);  //pink
+	else if(activeLod == 4u)
+		v_debugColor = vec4(1, 1, 0, 1); //yellow
+	else if(activeLod == 5u)
+		v_debugColor = vec4(1, 1, 1, 1);  //white
+
+	//float height = textureLod(u_heightmap, worldSpacePos.xz / vec2(u_heightmapSize), 0).r * u_heightScale;
+	v_RequestHeightMip = max(lodLevel - u_HeightmapLodOffset, 0);
+	float height = SampleHeightVT(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
 	worldSpacePos.y = height;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldSpacePos, 1);
 	//
@@ -172,14 +240,15 @@ void vertex()
 		//v_debugColor = vec3(1, 0, 1);
 		//break;
 	//}
-	v_debugColor = vec3(1, 1, 0);
+	//v_debugColor = vec3(1, 1, 0);
 }
 
 void fragment()
 {
 	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
-	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
+	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, v_RequestHeightMip);
 	worldNormal = normalize(worldNormal);
 	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
-	ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
+	//ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
+	ALBEDO = v_debugColor.rgb;
 }

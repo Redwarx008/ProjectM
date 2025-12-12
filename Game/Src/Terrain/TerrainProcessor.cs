@@ -1,3 +1,4 @@
+using Core;
 using Godot;
 using ProjectM;
 using System;
@@ -96,8 +97,7 @@ internal class TerrainProcessor : IDisposable
     {
         _terrain = terrain;
         _planeMesh = mesh;
-        CalcLodParameters(terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, (int)terrain.LeafNodeSize);
-        CreateQuadTree(terrain, definition);
+        _geometricVT = terrain.GeometricVT;
         TolerableError = definition.TerrainTolerableError;
         _cachedDispatchCallback = Callable.From(() =>
         {
@@ -109,6 +109,8 @@ internal class TerrainProcessor : IDisposable
             if (sel != null)
                 Dispatch(sel, selN);
         });
+        CalcLodParameters(terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, (int)terrain.LeafNodeSize);
+        CreateQuadTree(terrain, definition);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             InitNodeDescriptorBuffer();
@@ -124,15 +126,15 @@ internal class TerrainProcessor : IDisposable
         ReadOnlySpan<Plane> planes = camera.GetFrustum().ToArray();
         var selectDesc = new TerrainQuadTree.SelectDesc
         {
-            NodeSelectedInfos = _nodeSelectedInfos,
-            Planes = planes,
-            ViewerPos = camera.GlobalPosition,
-            TolerableError = TolerableError,
-            NodeSelectedCount = 0,
+            nodeSelectedInfos = _nodeSelectedInfos,
+            planes = planes,
+            viewerPos = camera.GlobalPosition,
+            tolerableError = TolerableError,
+            nodeSelectedCount = 0,
         };
         _quadTree.Select(ref selectDesc);
-
-        SubmitForRender(selectDesc.NodeSelectedCount);
+        UpdateVirtualTexture(selectDesc.nodeSelectedInfos, selectDesc.nodeSelectedCount);
+        SubmitForRender(selectDesc.nodeSelectedCount);
     }
 
     // 交换并提交给渲染线程（仅在主线程调用）
@@ -358,7 +360,6 @@ internal class TerrainProcessor : IDisposable
     private void CreateLodMap()
     {
         Debug.Assert(_planeMesh != null && _planeMesh.Material != null);
-        RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
         var desc = new GDTextureDesc()
         {
@@ -401,17 +402,31 @@ internal class TerrainProcessor : IDisposable
             }
 
             RenderingDevice rd = RenderingServer.GetRenderingDevice();
-            rd.FreeRid(_computePipeline);
+            //rd.FreeRid(_computePipeline);
             rd.FreeRid(_computeShader);
-            rd.FreeRid(_buildLodMapPipeline);
+            //rd.FreeRid(_buildLodMapPipeline);
             rd.FreeRid(_buildLodMapShader);
         }));
     }
 
     #region Process Virtual Texture
+
+    private void UpdateVirtualTexture(NodeSelectedInfo[] nodeSelectedList, int nodeSelectedCount)
+    {
+        Debug.Assert(_geometricVT != null);
+        for (int i = 0; i < nodeSelectedCount; ++i)
+        {
+            var nodeInfo = nodeSelectedList[i];
+            RequestPageForNode((int)nodeInfo.LodLevel, (int)nodeInfo.X, (int)nodeInfo.Y);
+        }
+        _geometricVT.Update();
+    }
+
     private void RequestPageForNode(int lod, int nodeX, int nodeY)
     {
-        int lodOffset = CalcLodOffsetToMip(_geometricVT.TileSize, (int)_terrain.LeafNodeSize);
+        Debug.Assert(_geometricVT != null);
+        Debug.Assert(_terrain != null);
+        int lodOffset = _terrain.HeightmapLodOffset;
         int pageMip = Math.Max(lod - lodOffset, 0);
         int nodeSize = (int)_terrain.LeafNodeSize << lod;
         int x = nodeX * nodeSize;
@@ -428,16 +443,7 @@ internal class TerrainProcessor : IDisposable
         _geometricVT.RequestPage(id);
     }
 
-    private static int CalcLodOffsetToMip(int pageSize, int leafNodeSize)
-    {
-        int lodOffsetToMip = 0;
-        while (leafNodeSize < pageSize)
-        {
-            leafNodeSize *= 2;
-            ++lodOffsetToMip;
-        }
-        return lodOffsetToMip;
-    }
+
 
     #endregion
 }

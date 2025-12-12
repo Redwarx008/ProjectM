@@ -97,7 +97,7 @@ void main()
 		instancedParams.data[instanceIndex].rowMajorMatrix[0] = vec4(1, 0, 0, float(nodeStartXY.x));
 		instancedParams.data[instanceIndex].rowMajorMatrix[1] = vec4(0, 1, 0, 0);
 		instancedParams.data[instanceIndex].rowMajorMatrix[2] = vec4(0, 0, 1, float(nodeStartXY.y));
-		instancedParams.data[instanceIndex].customData = vec4(float(lodLevel), 0, 0, 0);		
+		instancedParams.data[instanceIndex].customData = vec4(float(lodLevel), float(nodeXY.x), float(nodeXY.y), 0);		
 	}
 
 	// Fill NodeDescriptor buffer

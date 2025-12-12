@@ -7,6 +7,7 @@ using Core;
 [Tool]
 public partial class TerrainTest : Node3D
 {
+
     [Export]
     private Label? _fpsLabel;
 

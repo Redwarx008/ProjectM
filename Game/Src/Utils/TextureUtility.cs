@@ -218,7 +218,7 @@ public class GDTexture2DArray : IDisposable
         return texture._texture;
     }
 
-    public Texture2DArrayRD ToTexture2d()
+    public Texture2DArrayRD ToTexture2DArrayRD()
     {
         if (_texture == null)
         {

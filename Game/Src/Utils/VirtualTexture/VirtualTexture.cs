@@ -34,6 +34,13 @@ public struct VirtualPageID : System.IEquatable<VirtualPageID>, IComparable<Virt
     public static bool operator !=(VirtualPageID a, VirtualPageID b) => !a.Equals(b);
 }
 
+public struct VirtualTextureDesc
+{
+    public RenderingDevice.DataFormat format;
+
+    public string filePath;
+}
+
 public class VirtualTexture : IDisposable
 {
     public enum PageSize
@@ -43,21 +50,15 @@ public class VirtualTexture : IDisposable
         x512 = 512,
         x1024 = 1024,
     }
-    public struct VirtualTextureDesc
-    {
-        public RenderingDevice.DataFormat format;
-
-        public string filePath;
-    }
-
     public int MipCount { get; init; } 
-
     public int TileSize { get; init; }
-
     public int MaxPageCount { get; init; }
-
+    public int Padding { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
+    public bool Inited { get; private set; }
+
+    public static readonly int MaxPageTableMipInGpu = 8;
 
     private PageTable _pageTable;
     private PhysicalTexture _physicalTexture;
@@ -79,9 +80,9 @@ public class VirtualTexture : IDisposable
         Width = vTInfo.width;
         Height = vTInfo.height;
         TileSize = vTInfo.tileSize;
+        Padding = vTInfo.padding;
         _pageTable = new PageTable(Width, Height, TileSize, (int)maxPageCount, MipCount);
-        _physicalTexture = new PhysicalTexture(maxPageCount, (int)(maxPageCount - _pageTable.DynamicPageOffset), vTInfo, vtDescs);
-
+        _physicalTexture = new PhysicalTexture(maxPageCount, _pageTable.DynamicPageOffset, vTInfo, vtDescs);
         LoadResidentPages();
     }
 
@@ -169,9 +170,20 @@ public class VirtualTexture : IDisposable
                     y = y,
                     mip = persistentMip,
                 };
+                _pageTable.MarkLoading(id);
                 _streamer.RequestPage(id);
             }
         }
+    }
+
+    public GDTexture2DArray GetPhysicalTexture(int i)
+    {
+        return _physicalTexture[i];
+    }
+
+    public GDTexture2D GetPageTableInMipLevel(int mip)
+    {
+        return _pageTable.IndirectTextures[mip];
     }
 
     public void Dispose()

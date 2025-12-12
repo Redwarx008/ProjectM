@@ -23,11 +23,11 @@ public class TerrainQuadTree
 
     public ref struct SelectDesc
     {
-        public NodeSelectedInfo[] NodeSelectedInfos;
-        public int NodeSelectedCount;
-        public ReadOnlySpan<Plane> Planes;
-        public Vector3 ViewerPos;
-        public float TolerableError;
+        public NodeSelectedInfo[] nodeSelectedInfos;
+        public int nodeSelectedCount;
+        public ReadOnlySpan<Plane> planes;
+        public Vector3 viewerPos;
+        public float tolerableError;
     }
 
     private float _kFactor;
@@ -70,20 +70,20 @@ public class TerrainQuadTree
         var boundsMin = new Vector3(x, minZ, y);
         var boundsMax = new Vector3(x + size, maxZ, y + size);
         IntersectType cullResult = parentCompletelyInFrustum ? IntersectType.Inside :
-            MathExtension.FrustumCullAABB(boundsMin, boundsMax, selectDesc.Planes);
+            MathExtension.FrustumCullAABB(boundsMin, boundsMax, selectDesc.planes);
 
         if (cullResult == IntersectType.Outside)
         {
             return;
         }
 
-        float distance = MathExtension.MinDistanceFromPointToAabb(boundsMin, boundsMax, selectDesc.ViewerPos);
+        float distance = MathExtension.MinDistanceFromPointToAabb(boundsMin, boundsMax, selectDesc.viewerPos);
         float maxScreenSpaceError = geometricError / distance * _kFactor;
 
         // 如果到达最底层或者最大屏幕空间误差可以容忍
-        if (lodLevel == 0 || maxScreenSpaceError <= selectDesc.TolerableError)
+        if (lodLevel == 0 || maxScreenSpaceError <= selectDesc.tolerableError)
         {
-            selectDesc.NodeSelectedInfos[selectDesc.NodeSelectedCount++] = new NodeSelectedInfo
+            selectDesc.nodeSelectedInfos[selectDesc.nodeSelectedCount++] = new NodeSelectedInfo
             {
                 X = (uint)nodeX,
                 Y = (uint)nodeY,
@@ -97,7 +97,7 @@ public class TerrainQuadTree
         }
         else
         {
-            selectDesc.NodeSelectedInfos[selectDesc.NodeSelectedCount++] = new NodeSelectedInfo
+            selectDesc.nodeSelectedInfos[selectDesc.nodeSelectedCount++] = new NodeSelectedInfo
             {
                 X = (uint)nodeX,
                 Y = (uint)nodeY,

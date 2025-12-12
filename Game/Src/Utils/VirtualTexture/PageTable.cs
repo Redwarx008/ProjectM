@@ -1,5 +1,6 @@
 using Godot;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -31,11 +32,28 @@ public enum PageStatus
 
 internal class PageTable : IDisposable
 {
-    public static readonly int MaxPageTableUpdateEntry = 500;
+    private sealed class BatchQueue
+    {
+        private readonly Queue<Batch> _queue = new();
 
-    public static readonly int MaxPageTableMipInGpu = 8;
+        public record struct Batch(PageTableUpdateEntry[] Entries, int Count);
 
-    private GDTexture2D[] _indirectTextures;
+        public void Enqueue(Batch batch)
+        {
+            lock (_queue)
+                _queue.Enqueue(batch);
+        }
+
+        public bool TryDequeue(out Batch batch)
+        {
+            lock (_queue)
+                return _queue.TryDequeue(out batch);
+        }
+    }
+
+    public static readonly int MaxPageTableUpdateEntry = 2000;
+
+    public GDTexture2D[] IndirectTextures { get; private set; }
 
     // 活跃页面缓存：Key=虚拟页ID, Value=物理图集槽位索引
     // Capacity 应设置为物理图集的最大页数 (MaxPageCount)
@@ -44,19 +62,11 @@ internal class PageTable : IDisposable
     // 加载中集合：只记录 ID，防止重复 I/O
     private HashSet<VirtualPageID> _loadingPages = [];
 
-    private PageTableUpdateEntry[] _pendingEntries => _backPendingEntries;
+    private PageTableUpdateEntry[] _currentPendingEntries;
 
-    private int _pendingEntryCount = 0;
+    private int _currentPendingCount = 0;
 
-    private PageTableUpdateEntry[] _frontPendingEntries = new PageTableUpdateEntry[MaxPageTableUpdateEntry];
-    private PageTableUpdateEntry[] _backPendingEntries = new PageTableUpdateEntry[MaxPageTableUpdateEntry];
-
-    private readonly object _bufferLock = new();
-
-    //渲染线程将在 callback 中读取这两个引用（volatile 保证引用的原子读取/写入可见性）
-    private volatile PageTableUpdateEntry[]? _dispatchPendingEntries;
-
-    private volatile int _dispatchPendingEntryCount;
+    private BatchQueue _pendingBatches = new();
 
     private Callable _cachedDispatchCallback;
 
@@ -65,6 +75,8 @@ internal class PageTable : IDisposable
     private Rid _pipeline;
 
     private Rid _descriptorSet;
+
+    private Rid _shader;
 
     private GDBuffer _pageTableUpdateEntriesBuffer = null!;
 
@@ -77,19 +89,12 @@ internal class PageTable : IDisposable
     public int PersistentMipHeight { get; private set; }
     public PageTable(int l0Width, int l0Height, int tileSize, int maxPhysicalPages, int mipCount)
     {
-        _dynamicPages = new LRUCollection<VirtualPageID, int>(maxPhysicalPages);
-        _indirectTextures = new GDTexture2D[mipCount];
+        IndirectTextures = new GDTexture2D[mipCount];
         _persistentMip = mipCount - 1;
-        _cachedDispatchCallback = Callable.From(() =>
-        {
-            var list = _dispatchPendingEntries;
-            var counter = _dispatchPendingEntryCount;
-            if (list != null)
-            {
-                Dispatch(list, counter);
-            }
-        });
+        _currentPendingEntries = ArrayPool<PageTableUpdateEntry>.Shared.Rent(MaxPageTableUpdateEntry);
+        _cachedDispatchCallback = Callable.From(DispatchBatches);
         CalculatePersistentMipLayout(l0Width, l0Height, tileSize);
+        _dynamicPages = new LRUCollection<VirtualPageID, int>(maxPhysicalPages - DynamicPageOffset);
         InitializeFallbackToPersistentMip(l0Width, l0Height, tileSize);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
@@ -101,17 +106,19 @@ internal class PageTable : IDisposable
                 int pageCountY = (int)Math.Ceiling(height / (float)tileSize);
                 var desc = new GDTextureDesc()
                 {
-                    Format = Godot.RenderingDevice.DataFormat.R16G16Sfloat,
+                    Format = Godot.RenderingDevice.DataFormat.R16G16Uint,
                     Width = (uint)pageCountX,
                     Height = (uint)pageCountY,
                     Mipmaps = 1,
                     UsageBits = Godot.RenderingDevice.TextureUsageBits.StorageBit | Godot.RenderingDevice.TextureUsageBits.SamplingBit
         | Godot.RenderingDevice.TextureUsageBits.CanCopyToBit | Godot.RenderingDevice.TextureUsageBits.CanCopyFromBit
                 };
-                _indirectTextures[mip] = GDTexture2D.Create(desc);
+                IndirectTextures[mip] = GDTexture2D.Create(desc);
+                width = (int)Math.Ceiling(width * 0.5f);
+                height = (int)Math.Ceiling(height * 0.5f);
             }
-            Debug.Assert(PersistentMipWidth == (int)_indirectTextures[_indirectTextures.Length - 1].Width);
-            Debug.Assert(PersistentMipHeight == (int)_indirectTextures[_indirectTextures.Length - 1].Height);
+            Debug.Assert(PersistentMipWidth == (int)IndirectTextures[IndirectTextures.Length - 1].Width);
+            Debug.Assert(PersistentMipHeight == (int)IndirectTextures[IndirectTextures.Length - 1].Height);
             BuildPipeline();
             _pipelineInited = true;
         }));
@@ -153,14 +160,9 @@ internal class PageTable : IDisposable
 
     public void ActivatePage(VirtualPageID id, int slot)
     {
-        // 只有动态页面需要维护集合
-        if (id.mip < _persistentMip)
-        {
-            _loadingPages.Remove(id);
-            _dynamicPages.AddOrUpdate(id, slot);
-        }
-
-        _pendingEntries[_pendingEntryCount++] = new PageTableUpdateEntry
+        _loadingPages.Remove(id);
+       
+        _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
         {
             x = id.x,
             y = id.y,
@@ -168,6 +170,11 @@ internal class PageTable : IDisposable
             physicalLayer = slot,
             activeMip = id.mip,
         };
+        // 只有动态页面需要维护集合
+        if (id.mip < _persistentMip)
+        {
+            _dynamicPages.AddOrUpdate(id, slot);
+        }
     }
 
     public void DeactivatePage(VirtualPageID id)
@@ -180,7 +187,7 @@ internal class PageTable : IDisposable
             var (ancestorId, ancestorSlot) = FindNearestResidentAncestor(id);
 
             // 3. 更新 GPU 页表指向祖先
-            _pendingEntries[_pendingEntryCount++] = new PageTableUpdateEntry
+            _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
             {
                 x = id.x,
                 y = id.y,
@@ -207,25 +214,36 @@ internal class PageTable : IDisposable
 
     public void Update()
     {
-        if(!_pipelineInited || _pendingEntryCount == 0) return;
-        SubmitUpdateForRender();
-        _pendingEntryCount = 0;
+        if(!_pipelineInited || _currentPendingCount == 0) return;
+        SubmitCurrentBatch();
     }
 
-    private void SubmitUpdateForRender()
+    private void SubmitCurrentBatch()
     {
-        // 锁住交换 —— 确保可见性与原子性
-        lock (_bufferLock)
-        {
-            (_frontPendingEntries, _backPendingEntries) = (_backPendingEntries, _frontPendingEntries);
-            _dispatchPendingEntries = _frontPendingEntries;
-            _dispatchPendingEntryCount = _pendingEntryCount;
-        }
+        _pendingBatches.Enqueue(
+            new BatchQueue.Batch(_currentPendingEntries, _currentPendingCount));
+        _currentPendingEntries = ArrayPool<PageTableUpdateEntry>.Shared
+            .Rent(MaxPageTableUpdateEntry);
+        _currentPendingCount = 0;
 
         RenderingServer.CallOnRenderThread(_cachedDispatchCallback);
     }
 
-    private void Dispatch(PageTableUpdateEntry[] pendingEntries, int pendingEntryCount)
+    private void DispatchBatches()
+    {
+        while (_pendingBatches.TryDequeue(out var batch))
+        {
+            var entries = batch.Entries;
+            var count = batch.Count;
+
+            // GPU 提交
+            DispatchOneBatch(entries, count);
+
+            // 用完归还池
+            ArrayPool<PageTableUpdateEntry>.Shared.Return(entries, clearArray: false);
+        }
+    }
+    private void DispatchOneBatch(PageTableUpdateEntry[] pendingEntries, int pendingEntryCount)
     {
         var rd = RenderingServer.GetRenderingDevice();
         unsafe
@@ -233,7 +251,7 @@ internal class PageTable : IDisposable
             ReadOnlySpan<byte> counterBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref pendingEntryCount, 1));
             rd.BufferUpdate(_pageTableUpdateEntriesBuffer, 0, sizeof(int), counterBytes);
 
-            ReadOnlySpan<byte> dataBytes = MemoryMarshal.AsBytes(pendingEntries.AsSpan());
+            ReadOnlySpan<byte> dataBytes = MemoryMarshal.AsBytes(pendingEntries.AsSpan(0, pendingEntryCount));
             rd.BufferUpdate(_pageTableUpdateEntriesBuffer, sizeof(int), (uint)(sizeof(PageTableUpdateEntry) * pendingEntryCount), dataBytes);
         }
 
@@ -253,21 +271,21 @@ internal class PageTable : IDisposable
             pageTableUpdateEntriesBufferSize = (uint)(4 + sizeof(PageTableUpdateEntry) * MaxPageTableUpdateEntry);
         }
         _pageTableUpdateEntriesBuffer = GDBuffer.CreateStorage(pageTableUpdateEntriesBufferSize);
-        Rid shader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/PageTableCompute/glsl");
+        _shader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/PageTableCompute.glsl");
 
         var indirectTextureBinding = new RDUniform()
         {
             UniformType = RenderingDevice.UniformType.Image,
             Binding = 0
         };
-        for(int mip = 0; mip < _indirectTextures.Length; ++mip)
+        for(int mip = 0; mip < IndirectTextures.Length; ++mip)
         {
-            indirectTextureBinding.AddId(_indirectTextures[mip]);
+            indirectTextureBinding.AddId(IndirectTextures[mip]);
         }
         // Fill the remaining slots.
-        for(int mip = _indirectTextures.Length; mip < MaxPageTableMipInGpu; ++mip)
+        for(int mip = IndirectTextures.Length; mip < MaxPageTableMipInGpu; ++mip)
         {
-            indirectTextureBinding.AddId(_indirectTextures[_indirectTextures.Length - 1]);
+            indirectTextureBinding.AddId(IndirectTextures[IndirectTextures.Length - 1]);
         }
 
         var pageTableUpdateEntriesBufferBinding = new RDUniform()
@@ -277,11 +295,10 @@ internal class PageTable : IDisposable
         };
         pageTableUpdateEntriesBufferBinding.AddId(_pageTableUpdateEntriesBuffer);
 
-        _descriptorSet = rd.UniformSetCreate([indirectTextureBinding, pageTableUpdateEntriesBufferBinding], shader, 0);
+        _descriptorSet = rd.UniformSetCreate([indirectTextureBinding, pageTableUpdateEntriesBufferBinding], _shader, 0);
 
-        _pipeline = rd.ComputePipelineCreate(shader);
-
-        rd.FreeRid(shader);
+        _pipeline = rd.ComputePipelineCreate(_shader);
+        Debug.Assert(_pipeline != Constants.NullRid);
     }
 
     /// <summary>
@@ -290,7 +307,7 @@ internal class PageTable : IDisposable
     /// <returns>返回 (祖先ID, 祖先的物理槽位)</returns>
     private (VirtualPageID id, int slot) FindNearestResidentAncestor(VirtualPageID startId)
     {
-        VirtualPageID current = startId.GetParent();
+        VirtualPageID current = startId;
 
         while (true)
         {
@@ -311,12 +328,12 @@ internal class PageTable : IDisposable
         int height = l0Height;
         for (int mip = 0; mip < _persistentMip; mip++)
         {
-            width = (int)Math.Ceiling(width / (float)tileSize);
-            height = (int)Math.Ceiling(height / (float)tileSize);
+            int tileX = (int)Math.Ceiling(width / (float)tileSize);
+            int tileY = (int)Math.Ceiling(height / (float)tileSize);
 
-            for (int y = 0; y < height; y++)
+            for (int y = 0; y < tileY; y++)
             {
-                for (int x = 0; x < width; x++)
+                for (int x = 0; x < tileX; x++)
                 {
                     var id = new VirtualPageID()
                     {
@@ -330,7 +347,7 @@ internal class PageTable : IDisposable
                     var (ancestorId, ancestorSlot) = FindNearestResidentAncestor(id);
 
                     // 立即添加到 GPU 更新队列
-                    _pendingEntries[_pendingEntryCount++] = new PageTableUpdateEntry
+                    _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
                     {
                         x = id.x,
                         y = id.y,
@@ -360,8 +377,12 @@ internal class PageTable : IDisposable
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             var rd = RenderingServer.GetRenderingDevice();
-            rd.FreeRid(_pipeline);
+            rd.FreeRid(_shader);
             _pageTableUpdateEntriesBuffer.Dispose();
+            foreach(var texture in IndirectTextures)
+            {
+                texture.Dispose();
+            }
         }));
     }
 }
