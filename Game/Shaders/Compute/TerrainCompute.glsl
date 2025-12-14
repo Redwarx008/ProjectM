@@ -76,12 +76,11 @@ uint getNodeDescIndex(uvec2 nodeLocation, uint lod)
 
 void main()
 {
-	int counterDecrement = atomicAdd(pendingNodeList.count, -1);
-	if (counterDecrement <= 0)
+	if (gl_GlobalInvocationID.x >= pendingNodeList.count)
 	{
 		return;
 	}
-	uint index = uint(counterDecrement - 1);
+	uint index = gl_GlobalInvocationID.x;
 
 	uvec2 nodeXY = pendingNodeList.data[index].position;
 	uint lodLevel = pendingNodeList.data[index].lodLevel;

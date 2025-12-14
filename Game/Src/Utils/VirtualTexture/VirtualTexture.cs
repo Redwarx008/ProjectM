@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.ConstrainedExecution;
 using Logger = Core.Logger;
 
 namespace ProjectM;
@@ -13,19 +14,6 @@ public struct VirtualPageID : System.IEquatable<VirtualPageID>, IComparable<Virt
     public int mip;
     public int x;
     public int y;
-
-    // 获取父级页面 (Mip + 1, 坐标 / 2)
-    public VirtualPageID GetParent()
-    {
-        // 假设 mip 越大越粗糙，mip 0 最精细
-        return new VirtualPageID()
-        {
-            mip = this.mip + 1,
-            x = this.x >> 1,
-            y = this.y >> 1
-        };
-    }
-
     public int CompareTo(VirtualPageID other) => other.mip.CompareTo(mip);
     public bool Equals(VirtualPageID other) => mip == other.mip && x == other.x && y == other.y;
     public override bool Equals(object? obj) => obj is VirtualPageID v && Equals(v);
@@ -66,6 +54,10 @@ public class VirtualTexture : IDisposable
 
     private int _loadedPersistentCount = 0;
 
+    private bool _persistentReady = false;
+
+    private readonly List<VirtualPageID> _pendingRequests = [];
+
     public VirtualTexture(uint maxPageCount, VirtualTextureDesc[] vtDescs)
     {
         Debug.Assert(maxPageCount <= 2048);
@@ -88,18 +80,40 @@ public class VirtualTexture : IDisposable
 
     public void Update()
     {
+        FlushPageRequests();
         ProcessLoadedPages();
         _pageTable.Update();
     }
 
-    public void RequestPage(VirtualPageID pageID)
+    public void RequestPage(VirtualPageID id)
     {
-        PageStatus status = _pageTable.QueryStatus(pageID);
-        if (status == PageStatus.NotLoaded)
+        VirtualPageID cur = id;
+        while(cur.mip < MipCount - 1)
         {
-            _pageTable.MarkLoading(pageID);
-            _streamer.RequestPage(pageID);
+            if (_pageTable.QueryStatus(cur) == PageStatus.NotLoaded)
+            {
+                _pageTable.MarkLoading(cur);
+                _pendingRequests.Add(cur);
+            }
+
+            cur = PageTable.MapToAncestor(cur, cur.mip + 1);
         }
+    }
+
+    private void FlushPageRequests()
+    {
+        if (_pendingRequests.Count == 0)
+            return;
+
+        // mip 越大越先请求（祖先优先）
+        _pendingRequests.Sort((a, b) => b.mip.CompareTo(a.mip));
+
+        foreach (var id in _pendingRequests)
+        {
+            _streamer.RequestPage(id);
+        }
+
+        _pendingRequests.Clear();
     }
 
     private void ProcessLoadedPages()
@@ -108,50 +122,39 @@ public class VirtualTexture : IDisposable
         int processLimit = 10;
         while (processLimit-- > 0 && _streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, byte[] data) result))
         {
-            int targetSlot = -1;
-
-            // 分支 A: 常驻页面
+            int targetSlot;
             if (result.id.mip == persistentMip)
             {
-                // [优化] 1. 直接算槽位
                 targetSlot = _pageTable.GetPhysicalSlot(result.id);
 
                 _physicalTexture.Upload(result.textureId, targetSlot, result.data);
 
-                // 3. 激活
                 _pageTable.ActivatePage(result.id, targetSlot);
 
-                // 4. 检查是否全部就绪
                 _loadedPersistentCount++;
                 if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
                 {
+                    _persistentReady = true;
                     Logger.Info("[VT] Persistent Pages Ready");
                 }
+                continue;
             }
-            // 分支 B: 动态页面
-            else
-            {
-                // 1. 尝试分配空闲
-                if (!_physicalTexture.TryAllocateDynamic(out targetSlot))
-                {
-                    // 2. 满了 -> LRU 淘汰
-                    if (_pageTable.TryGetLRUPage(out VirtualPageID lruID, out int lruSlot))
-                    {
-                        _pageTable.DeactivatePage(lruID);
-                        _physicalTexture.FreeDynamic(lruSlot); // 逻辑上释放，实际马上复用
-                        targetSlot = lruSlot;
-                    }
-                    else
-                    {
-                        // 无法淘汰 (理论不应发生，除非 MaxPageCount 太小)
-                        continue;
-                    }
-                }
 
-                // 3. 上传 & 激活
-                _physicalTexture.Upload(result.textureId, targetSlot, result.data);
-                _pageTable.ActivatePage(result.id, targetSlot);
+            if (!_persistentReady)
+                continue;
+
+            if (!_physicalTexture.TryAllocateDynamic(out targetSlot))
+            {
+                // 2. 满了 -> LRU 淘汰
+                if (!_pageTable.TryEvictOne(out var evictedId, out int evictedSlot))
+                    continue;
+
+                _physicalTexture.FreeDynamic(evictedSlot); 
+                targetSlot = evictedSlot;
             }
+
+            _physicalTexture.Upload(result.textureId, targetSlot, result.data);
+            _pageTable.ActivatePage(result.id, targetSlot);
         }
     }
 

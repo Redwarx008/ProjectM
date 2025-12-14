@@ -51,8 +51,6 @@ internal class PageTable : IDisposable
         }
     }
 
-    public static readonly int MaxPageTableUpdateEntry = 2000;
-
     public GDTexture2D[] IndirectTextures { get; private set; }
 
     // 活跃页面缓存：Key=虚拟页ID, Value=物理图集槽位索引
@@ -61,6 +59,8 @@ internal class PageTable : IDisposable
 
     // 加载中集合：只记录 ID，防止重复 I/O
     private HashSet<VirtualPageID> _loadingPages = [];
+
+    private ArrayPool<PageTableUpdateEntry> _arrayPool;
 
     private PageTableUpdateEntry[] _currentPendingEntries;
 
@@ -71,6 +71,8 @@ internal class PageTable : IDisposable
     private Callable _cachedDispatchCallback;
 
     private int _persistentMip;
+
+    private int _maxPageTableUpdateEntry = 2000;
 
     private Rid _pipeline;
 
@@ -91,11 +93,11 @@ internal class PageTable : IDisposable
     {
         IndirectTextures = new GDTexture2D[mipCount];
         _persistentMip = mipCount - 1;
-        _currentPendingEntries = ArrayPool<PageTableUpdateEntry>.Shared.Rent(MaxPageTableUpdateEntry);
         _cachedDispatchCallback = Callable.From(DispatchBatches);
-        CalculatePersistentMipLayout(l0Width, l0Height, tileSize);
+        CalculateLayout(l0Width, l0Height, tileSize);
+        _arrayPool = ArrayPool<PageTableUpdateEntry>.Create(_maxPageTableUpdateEntry, 2);
+        _currentPendingEntries = _arrayPool.Rent(_maxPageTableUpdateEntry);
         _dynamicPages = new LRUCollection<VirtualPageID, int>(maxPhysicalPages - DynamicPageOffset);
-        InitializeFallbackToPersistentMip(l0Width, l0Height, tileSize);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             int width = l0Width;
@@ -122,6 +124,8 @@ internal class PageTable : IDisposable
             BuildPipeline();
             _pipelineInited = true;
         }));
+        InitializeFallbackToPersistentMip(l0Width, l0Height, tileSize);
+        SubmitCurrentBatch();
     }
 
     public PageStatus QueryStatus(VirtualPageID pageID)
@@ -173,29 +177,38 @@ internal class PageTable : IDisposable
         // 只有动态页面需要维护集合
         if (id.mip < _persistentMip)
         {
-            _dynamicPages.AddOrUpdate(id, slot);
+            Debug.Assert(!_dynamicPages.ContainsKey(id));
+            _dynamicPages.Add(id, slot);
         }
     }
 
-    public void DeactivatePage(VirtualPageID id)
+    public bool TryEvictOne(out VirtualPageID id, out int slot)
     {
-        if (id.mip == _persistentMip) return; 
-
-        // 1. 从 LRU 中移除
-        if (_dynamicPages.Remove(id))
+        if (_dynamicPages.TryPopOldest(out id, out slot))
         {
-            var (ancestorId, ancestorSlot) = FindNearestResidentAncestor(id);
-
-            // 3. 更新 GPU 页表指向祖先
-            _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
-            {
-                x = id.x,
-                y = id.y,
-                mip = id.mip,
-                physicalLayer = ancestorSlot,                    // 指向 ancestor 的槽位
-                activeMip = ancestorId.mip,                      // 并告诉 Shader 实际 LOD 是 ancestor 的
-            };
+            DeactivatePage(id);
+            return true;
         }
+        id = default;
+        slot = -1;
+        return false;
+    }
+
+    private void DeactivatePage(VirtualPageID id)
+    {
+        if (id.mip == _persistentMip) return;
+
+        var (ancestorId, ancestorSlot) = FindNearestResidentAncestor(id);
+
+        // 3. 更新 GPU 页表指向祖先
+        _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
+        {
+            x = id.x,
+            y = id.y,
+            mip = id.mip,
+            physicalLayer = ancestorSlot,                    // 指向 ancestor 的槽位
+            activeMip = ancestorId.mip,                      // 并告诉 Shader 实际 LOD 是 ancestor 的
+        };
     }
 
     public int GetPhysicalSlot(VirtualPageID id)
@@ -222,8 +235,7 @@ internal class PageTable : IDisposable
     {
         _pendingBatches.Enqueue(
             new BatchQueue.Batch(_currentPendingEntries, _currentPendingCount));
-        _currentPendingEntries = ArrayPool<PageTableUpdateEntry>.Shared
-            .Rent(MaxPageTableUpdateEntry);
+        _currentPendingEntries = _arrayPool.Rent(_maxPageTableUpdateEntry);
         _currentPendingCount = 0;
 
         RenderingServer.CallOnRenderThread(_cachedDispatchCallback);
@@ -240,7 +252,7 @@ internal class PageTable : IDisposable
             DispatchOneBatch(entries, count);
 
             // 用完归还池
-            ArrayPool<PageTableUpdateEntry>.Shared.Return(entries, clearArray: false);
+            _arrayPool.Return(entries, clearArray: false);
         }
     }
     private void DispatchOneBatch(PageTableUpdateEntry[] pendingEntries, int pendingEntryCount)
@@ -268,7 +280,7 @@ internal class PageTable : IDisposable
         uint pageTableUpdateEntriesBufferSize;
         unsafe
         {
-            pageTableUpdateEntriesBufferSize = (uint)(4 + sizeof(PageTableUpdateEntry) * MaxPageTableUpdateEntry);
+            pageTableUpdateEntriesBufferSize = (uint)(4 + sizeof(PageTableUpdateEntry) * _maxPageTableUpdateEntry);
         }
         _pageTableUpdateEntriesBuffer = GDBuffer.CreateStorage(pageTableUpdateEntriesBufferSize);
         _shader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/PageTableCompute.glsl");
@@ -307,19 +319,20 @@ internal class PageTable : IDisposable
     /// <returns>返回 (祖先ID, 祖先的物理槽位)</returns>
     private (VirtualPageID id, int slot) FindNearestResidentAncestor(VirtualPageID startId)
     {
-        VirtualPageID current = startId;
-
-        while (true)
+        for (int mip = startId.mip; mip <= _persistentMip; ++mip)
         {
-            int slot = GetPhysicalSlot(current);
+            var candidate = mip == startId.mip
+                ? startId
+                : MapToAncestor(startId, mip);
+
+            int slot = GetPhysicalSlot(candidate);
             if (slot != -1)
             {
-                return (current, slot);
+                return (candidate, slot);
             }
-
-            // 理论上不会死循环，因为最终会命中 _persistentStartMip 层的根节点
-            current = current.GetParent();
         }
+
+        throw new InvalidOperationException("No resident ancestor found");
     }
     private void InitializeFallbackToPersistentMip(int l0Width, int l0Height, int tileSize)
     {
@@ -362,7 +375,7 @@ internal class PageTable : IDisposable
         }
     }
 
-    private void CalculatePersistentMipLayout(int l0Width, int l0Height, int tileSize)
+    private void CalculateLayout(int l0Width, int l0Height, int tileSize)
     {
         int scale = 1 << _persistentMip;
         int w = (int)Math.Ceiling(l0Width / (float)(tileSize * scale));
@@ -370,6 +383,18 @@ internal class PageTable : IDisposable
         w = Math.Max(1, w); h = Math.Max(1, h);
         PersistentMipWidth = w; PersistentMipHeight = h;
         DynamicPageOffset = PersistentMipWidth * PersistentMipHeight;
+        int pageCount = 0;
+        int width = l0Width;
+        int height = l0Height;
+        for (int mip = 0; mip <= _persistentMip; ++mip)
+        {
+            int tileX = (int)Math.Ceiling(width / (float)tileSize);
+            int tileY = (int)Math.Ceiling(height / (float)tileSize);
+            pageCount += tileX * tileY;
+            width = (int)Math.Ceiling(width * 0.5f);
+            height = (int)Math.Ceiling(height * 0.5f);
+        }
+        _maxPageTableUpdateEntry = pageCount;
     }
 
     public void Dispose()
@@ -384,5 +409,19 @@ internal class PageTable : IDisposable
                 texture.Dispose();
             }
         }));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static VirtualPageID MapToAncestor(VirtualPageID id, int ancestorMip)
+    {
+        int delta = ancestorMip - id.mip;
+        float scale = 1 << delta;
+
+        return new VirtualPageID
+        {
+            mip = ancestorMip,
+            x = (int)MathF.Floor((id.x + 0.5f) / scale),
+            y = (int)MathF.Floor((id.y + 0.5f) / scale)
+        };
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -39,33 +40,13 @@ public class LRUCollection<TKey, TValue> where TKey : notnull
         return false;
     }
 
-    public void AddOrUpdate(TKey key, TValue value)
+    public void Add(TKey key, TValue value)
     {
-        if (_map.TryGetValue(key, out var node))
-        {
-            var newPair = new KeyValuePair<TKey, TValue>(key, value);
+        Debug.Assert(!_map.ContainsKey(key));
 
-            node.Value = newPair;
-
-            _list.Remove(node);
-            _list.AddFirst(node);
-        }
-        else
-        {
-            // 淘汰最旧
-            if (_map.Count >= _capacity)
-            {
-                var last = _list.Last!;
-                _map.Remove(last.Value.Key);
-                _list.RemoveLast();
-            }
-
-            var newNode = new LinkedListNode<KeyValuePair<TKey, TValue>>(
-                new KeyValuePair<TKey, TValue>(key, value));
-
-            _list.AddFirst(newNode);
-            _map[key] = newNode;
-        }
+        var node = new LinkedListNode<KeyValuePair<TKey, TValue>>(new KeyValuePair<TKey, TValue>(key, value));
+        _list.AddFirst(node);
+        _map[key] = node;
     }
 
     public bool ContainsKey(TKey key) => _map.ContainsKey(key);
@@ -96,6 +77,23 @@ public class LRUCollection<TKey, TValue> where TKey : notnull
         {
             key = _list.Last.Value.Key;
             value = _list.Last.Value.Value;
+            return true;
+        }
+        key = default!;
+        value = default!;
+        return false;
+    }
+
+    public bool TryPopOldest(out TKey key, out TValue value)
+    {
+        if (_list.Last != null)
+        {
+            var node = _list.Last;
+            key = node.Value.Key;
+            value = node.Value.Value;
+
+            _list.RemoveLast();
+            _map.Remove(key);
             return true;
         }
         key = default!;

@@ -27,17 +27,22 @@ layout (set = 0, binding = 1, std430)  buffer PageTableUpdateList
 
 void main()
 {
-//	int counterDecrement = atomicAdd(pendingPageTableUpdates.count, -1);
-//	if (counterDecrement <= 0)
-//	{
-//		return;
-//	}
-//	uint index = uint(counterDecrement - 1);
 	if (gl_GlobalInvocationID.x >= pendingPageTableUpdates.count)
 	{
 		return;
 	}
 	uint index = gl_GlobalInvocationID.x;
 	PageTableUpdateEntry entry = pendingPageTableUpdates.data[index];
-	imageStore(pageTable[entry.mip], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0));
+	// idk how to avoid this, we can't index with not constant in glsl in AMD device.
+	switch(entry.mip)
+	{
+		case 0: imageStore(pageTable[0], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 1: imageStore(pageTable[1], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 2: imageStore(pageTable[2], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 3: imageStore(pageTable[3], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 4: imageStore(pageTable[4], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 5: imageStore(pageTable[5], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 6: imageStore(pageTable[6], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+		case 7: imageStore(pageTable[7], ivec2(entry.x, entry.y), uvec4(entry.physicalLayer, entry.activeMip, 0, 0)); break;
+	}
 }
