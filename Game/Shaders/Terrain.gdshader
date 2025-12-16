@@ -32,8 +32,9 @@ varying vec4 v_debugColor;
 
 varying flat int v_RequestHeightMip;
 
-uvec4 GetPageInfo(vec2 globalUv, int requestMip)
+uvec4 SamplePageTable(vec2 globalUv, int requestMip)
 {
+	// idk how to avoid this, we can't index with not constant in glsl in AMD device.
 	switch(requestMip)
 	{
 		case 0: return textureLod(u_VTPageTable[0], globalUv, 0);
@@ -47,48 +48,29 @@ uvec4 GetPageInfo(vec2 globalUv, int requestMip)
 	}
 }
 
+ivec2 PageTableSize(uint mip)
+{
+	switch(mip)
+	{
+		case 0u: return textureSize(u_VTPageTable[0], 0);
+		case 1u: return textureSize(u_VTPageTable[1], 0);
+		case 2u: return textureSize(u_VTPageTable[2],  0);
+		case 3u: return textureSize(u_VTPageTable[3],  0);
+		case 4u: return textureSize(u_VTPageTable[4],  0);
+		case 5u: return textureSize(u_VTPageTable[5],  0);
+		case 6u: return textureSize(u_VTPageTable[6],  0);
+		case 7u: return textureSize(u_VTPageTable[7],  0);
+	}
+}
+
 vec3 GetVirtualTextureUV(vec2 globalUv, int requestMip)
 {
-	uvec4 pageInfo;
-	ivec2 gridDim;
-	switch(requestMip) // idk how to avoid this, we can't index with not constant in glsl in AMD device.
-	{
-		case 0:
-			pageInfo = textureLod(u_VTPageTable[0], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[0], 0);
-			break;
-		case 1:
-			pageInfo = textureLod(u_VTPageTable[1], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[1], 0);
-			break;
-		case 2:
-			pageInfo = textureLod(u_VTPageTable[2], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[2], 0);
-			break;
-		case 3:
-			pageInfo = textureLod(u_VTPageTable[3], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[3], 0);
-			break;
-		case 4:
-			pageInfo = textureLod(u_VTPageTable[4], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[4], 0);
-			break;
-		case 5:
-			pageInfo = textureLod(u_VTPageTable[5], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[5], 0);
-			break;
-		case 6:
-			pageInfo = textureLod(u_VTPageTable[6], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[6], 0);
-			break;
-		case 7:
-			pageInfo = textureLod(u_VTPageTable[7], globalUv, 0);
-			gridDim = textureSize(u_VTPageTable[7], 0);
-			break;
-	}
+	uvec4 pageInfo = SamplePageTable(globalUv, requestMip);
+
 	uint physSlot = pageInfo.x;
 	uint activeLod = pageInfo.y;
 	// 当前 Active LOD 下，整个地形被切分为 gridDimX * gridDimY 个页面
+	ivec2 gridDim = PageTableSize(activeLod);
 	vec2 uvInPage = fract(globalUv * vec2(gridDim));
 	vec2 paddedPageSize = vec2(textureSize(u_VTPhysicalHeightmap, 0).xy);
 	vec2 pageSize = paddedPageSize -  2.0 * vec2(float(u_PagePadding));
@@ -230,6 +212,22 @@ vec3 CalculateNormal(vec2 uv)
 	return normalize(vec3(left - right, 2.0, up - down));
 }
 
+vec4 DebugColor(vec2 globalUV, int requestMip)
+{
+	uvec4 pageInfo = SamplePageTable(globalUV, requestMip);
+
+	uint activeLod = pageInfo.y;
+		//float debug;
+	switch(activeLod)
+	{
+		case 0u : return vec4(1, 0, 0, 1);  //red
+		case 1u : return vec4(0, 1, 0, 1);  //green
+		case 2u : return vec4(0, 0, 1, 1);  //blue
+		case 3u : return vec4(1, 0, 1, 1);  //pink
+		case 4u : return vec4(1, 1, 0, 1);  //yellow
+		case 5u : return vec4(1, 1, 1, 1);  //white
+	}
+}
 
 void vertex()
 {
@@ -252,22 +250,7 @@ void vertex()
 
 	v_RequestHeightMip = max(lodLevel - u_HeightmapLodOffset, 0);
 
-	uvec4 pageInfo = GetPageInfo(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
-
-	uint activeLod = pageInfo.y;
-		//float debug;
-	if(activeLod == 0u)
-		v_debugColor = vec4(1, 0, 0, 1);  //red
-	else if(activeLod == 1u)
-		v_debugColor = vec4(0, 1, 0, 1);  //green
-	else if(activeLod == 2u)
-		v_debugColor = vec4(0, 0, 1, 1);  //blue
-	else if(activeLod == 3u)
-		v_debugColor = vec4(1, 0, 1, 1);  //pink
-	else if(activeLod == 4u)
-		v_debugColor = vec4(1, 1, 0, 1); //yellow
-	else if(activeLod == 5u)
-		v_debugColor = vec4(1, 1, 1, 1);  //white
+	v_debugColor = DebugColor(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
 
 	//float height = textureLod(u_heightmap, worldSpacePos.xz / vec2(u_heightmapSize), 0).r * u_heightScale;
 

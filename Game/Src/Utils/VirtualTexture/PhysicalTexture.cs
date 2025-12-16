@@ -68,7 +68,7 @@ internal class PhysicalTexture : IDisposable
     {
         if (slot < _reservedCount)
             throw new InvalidOperationException($"Cannot free reserved slot {slot}");
-
+        Debug.Assert(!_freeSlots.Contains(slot));
         _freeSlots.Add(slot);
     }
 

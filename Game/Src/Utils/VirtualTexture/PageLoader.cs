@@ -1,3 +1,4 @@
+using Microsoft.Win32.SafeHandles;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -22,8 +23,8 @@ internal class PageLoader : IDisposable
         public int Mipmaps;
     }
 
-    private FileStream _fs;
-    private readonly object _lockObj = new object();
+    private readonly SafeFileHandle _fileHandle; 
+    private readonly long _fileLength;
 
     // 元数据
 
@@ -52,7 +53,8 @@ internal class PageLoader : IDisposable
             throw new FileNotFoundException($"VT file not found: {filePath}");
 
         FilePath = filePath;
-        _fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        _fileHandle = File.OpenHandle(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.RandomAccess);
+        _fileLength = RandomAccess.GetLength(_fileHandle);
 
         ReadHeaderAndPrecalculateOffsets();
     }
@@ -62,7 +64,7 @@ internal class PageLoader : IDisposable
         // 1. 读取 Header
         int headerSize = Marshal.SizeOf<VTHeader>();
         Span<byte> byteView = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref _header, 1));
-        _fs.Read(byteView);
+        RandomAccess.Read(_fileHandle, byteView, 0);
 
         // 2. 准备预计算数据
         _mipLevelFileOffsets = new long[Header.Mipmaps];
@@ -130,33 +132,17 @@ internal class PageLoader : IDisposable
         long tileIndex = (long)y * tilesPerRow + x;
         long absoluteOffset = mipBaseOffset + tileIndex * _bytesPerTile;
 
-        // 3. 执行读取 (加锁)
+        if (absoluteOffset + _bytesPerTile > _fileLength) return null;
+
         byte[] buffer = new byte[_bytesPerTile];
 
-        lock (_lockObj)
-        {
-            if (_fs.Position != absoluteOffset)
-            {
-                _fs.Seek(absoluteOffset, SeekOrigin.Begin);
-            }
+        int bytesRead = RandomAccess.Read(_fileHandle, buffer, absoluteOffset);
 
-            int bytesRead = _fs.Read(buffer, 0, _bytesPerTile);
-
-            if (bytesRead != _bytesPerTile)
-            {
-                // 这种情况通常意味着文件损坏或索引越界
-                return null;
-            }
-        }
-
-        return buffer;
+        return bytesRead == _bytesPerTile ? buffer : null;
     }
 
     public void Dispose()
     {
-        if (_fs != null)
-        {
-            _fs.Dispose();
-        }
+        _fileHandle?.Dispose();
     }
 }

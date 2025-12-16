@@ -86,7 +86,6 @@ internal class StreamingManager : IDisposable
 
                 for(int i = 0; i < _loaders.Count; ++i)
                 {
-                    // 执行读取 (LoadPage 内部有文件锁，是安全的)
                     byte[]? data = _loaders[i].LoadPage(req.mip, req.x, req.y);
 
                     if (data != null)

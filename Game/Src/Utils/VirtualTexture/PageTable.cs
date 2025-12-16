@@ -198,7 +198,7 @@ internal class PageTable : IDisposable
     {
         if (id.mip == _persistentMip) return;
 
-        var (ancestorId, ancestorSlot) = FindNearestResidentAncestor(id);
+        VirtualPageID ancestorId = MapToAncestor(id, _persistentMip);
 
         // 3. 更新 GPU 页表指向祖先
         _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
@@ -206,7 +206,7 @@ internal class PageTable : IDisposable
             x = id.x,
             y = id.y,
             mip = id.mip,
-            physicalLayer = ancestorSlot,                    // 指向 ancestor 的槽位
+            physicalLayer = GetPhysicalSlot(ancestorId),                    // 指向 ancestor 的槽位
             activeMip = ancestorId.mip,                      // 并告诉 Shader 实际 LOD 是 ancestor 的
         };
     }
@@ -313,27 +313,6 @@ internal class PageTable : IDisposable
         Debug.Assert(_pipeline != Constants.NullRid);
     }
 
-    /// <summary>
-    /// 寻找最近的已常驻祖先页面
-    /// </summary>
-    /// <returns>返回 (祖先ID, 祖先的物理槽位)</returns>
-    private (VirtualPageID id, int slot) FindNearestResidentAncestor(VirtualPageID startId)
-    {
-        for (int mip = startId.mip; mip <= _persistentMip; ++mip)
-        {
-            var candidate = mip == startId.mip
-                ? startId
-                : MapToAncestor(startId, mip);
-
-            int slot = GetPhysicalSlot(candidate);
-            if (slot != -1)
-            {
-                return (candidate, slot);
-            }
-        }
-
-        throw new InvalidOperationException("No resident ancestor found");
-    }
     private void InitializeFallbackToPersistentMip(int l0Width, int l0Height, int tileSize)
     {
         // 遍历所有非常驻层级
@@ -355,9 +334,9 @@ internal class PageTable : IDisposable
                         mip = mip,
                     };
 
-                    // 查找它的 Root 祖先 (这里简化为直接指向唯一的 Root)
+                    // 查找它的 Root 祖先
                     // 如果有多个 Root Page，需要计算坐标对应关系
-                    var (ancestorId, ancestorSlot) = FindNearestResidentAncestor(id);
+                    VirtualPageID ancestorId = MapToAncestor(id, _persistentMip);
 
                     // 立即添加到 GPU 更新队列
                     _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
@@ -365,7 +344,7 @@ internal class PageTable : IDisposable
                         x = id.x,
                         y = id.y,
                         mip = mip,
-                        physicalLayer = ancestorSlot,
+                        physicalLayer = GetPhysicalSlot(ancestorId),
                         activeMip = ancestorId.mip,
                     };
                 }
