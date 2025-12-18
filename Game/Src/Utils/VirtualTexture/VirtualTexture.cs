@@ -149,7 +149,7 @@ public class VirtualTexture : IDisposable
                 if (!_pageTable.TryEvictOne(out var evictedId, out int evictedSlot))
                     continue;
 
-                _physicalTexture.FreeDynamic(evictedSlot); 
+                //_physicalTexture.FreeDynamic(evictedSlot); 
                 targetSlot = evictedSlot;
             }
 

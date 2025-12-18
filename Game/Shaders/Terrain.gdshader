@@ -93,13 +93,12 @@ vec3 CalculateNormalVT(vec2 uv, int requestMip)
 
     // 使用 SampleHeightVT 替代 textureLod
     // 请求 Mip 0 以获得最精细的法线细节
-    float left  = SampleHeightVT(uv + vec2(-texelSize.x, 0), requestMip) * u_heightScale;
-    float right = SampleHeightVT(uv + vec2(texelSize.x, 0), requestMip) * u_heightScale;
-    float up    = SampleHeightVT(uv + vec2(0, -texelSize.y), requestMip) * u_heightScale;
-    float down  = SampleHeightVT(uv + vec2(0, texelSize.y), requestMip) * u_heightScale;
+    float left  = SampleHeightVT(uv + vec2(-texelSize.x, 0), requestMip);
+    float right = SampleHeightVT(uv + vec2(texelSize.x, 0), requestMip);
+    float up    = SampleHeightVT(uv + vec2(0, -texelSize.y), requestMip);
+    float down  = SampleHeightVT(uv + vec2(0, texelSize.y), requestMip);
 
-	float strength = 2.0;
-    return normalize(vec3(left - right, strength * texelSize.x * u_heightScale, up - down));
+    return normalize(vec3(left - right, 2.0, up - down));
 }
 
 int GetBlockLod(ivec2 index)
@@ -250,7 +249,7 @@ void vertex()
 
 	v_RequestHeightMip = max(lodLevel - u_HeightmapLodOffset, 0);
 
-	v_debugColor = DebugColor(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
+	//v_debugColor = DebugColor(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
 
 	//float height = textureLod(u_heightmap, worldSpacePos.xz / vec2(u_heightmapSize), 0).r * u_heightScale;
 
@@ -289,5 +288,5 @@ void fragment()
 	worldNormal = normalize(worldNormal);
 	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
 	ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
-	ALBEDO *= v_debugColor.rgb;
+	//ALBEDO *= v_debugColor.rgb;
 }
