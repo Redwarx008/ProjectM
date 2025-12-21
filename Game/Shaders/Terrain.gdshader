@@ -228,6 +228,30 @@ vec4 DebugColor(vec2 globalUV, int requestMip)
 	}
 }
 
+int ResolveHeightMipForVertex(
+    ivec2 blockIndex,
+    ivec2 vertexInBlock,
+    int blockSize,
+    int selfLod
+) {
+    int forcedLod = selfLod;
+
+    if(vertexInBlock.x == 0) {
+        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(-1, 0)));
+    }
+    if(vertexInBlock.x == blockSize) {
+        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(1, 0)));
+    }
+    if(vertexInBlock.y == 0) {
+        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(0, -1)));
+    }
+    if(vertexInBlock.y == blockSize) {
+        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(0, 1)));
+    }
+
+    return forcedLod;
+}
+
 void vertex()
 {
 	int lodLevel = int(INSTANCE_CUSTOM.x);
@@ -243,11 +267,21 @@ void vertex()
 
 	vec2 uv = vertexCoord / vec2(u_heightmapSize);
 	UV = uv;
-	//FixSeams(vertexCoord, VERTEX, UV, u_baseChunkSize * int(chunkScale));
+	FixSeams(vertexCoord, VERTEX, UV, u_baseChunkSize * int(chunkScale));
 	worldSpacePos = (MODEL_MATRIX * vec4(VERTEX, 1)).xyz;
 	worldSpacePos.xz = min(worldSpacePos.xz, vec2(u_heightmapSize) - vec2(1.0, 1.0));
 
-	v_RequestHeightMip = max(lodLevel - u_HeightmapLodOffset, 0);
+	ivec2 blockIndex = ivec2(floor(worldSpacePos.xz / float(u_baseChunkSize)));
+	ivec2 vertexInBlock = ivec2(VERTEX.xz);
+
+	int resolvedLod = ResolveHeightMipForVertex(
+	    blockIndex,
+	    vertexInBlock,
+	    u_baseChunkSize * int(chunkScale),
+	    lodLevel
+	);
+
+	v_RequestHeightMip = max(resolvedLod - u_HeightmapLodOffset, 0);
 
 	//v_debugColor = DebugColor(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
 
