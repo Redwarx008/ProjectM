@@ -35,4 +35,3 @@ project/solution_directory=".."
 [rendering]
 
 driver/depth_prepass/enable=false
-anti_aliasing/quality/use_taa=true

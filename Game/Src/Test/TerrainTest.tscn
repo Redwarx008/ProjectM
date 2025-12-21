@@ -17,9 +17,10 @@ sky = SubResource("Sky_dk6pg")
 tonemap_mode = 2
 glow_enabled = true
 
-[node name="TerrainTest" type="Node3D" unique_id=1923949649 node_paths=PackedStringArray("_fpsLabel", "_terrain")]
+[node name="TerrainTest" type="Node3D" unique_id=1923949649 node_paths=PackedStringArray("_fpsLabel", "_cameraPosLabel", "_terrain")]
 script = ExtResource("1_dk6pg")
 _fpsLabel = NodePath("Control/Panel/FpsLabel")
+_cameraPosLabel = NodePath("Control/Panel/CameraPosLabel")
 _terrain = NodePath("Terrain")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=436894603]
@@ -50,7 +51,18 @@ layout_mode = 0
 offset_top = 45.0
 offset_right = 86.0
 offset_bottom = 68.0
-text = " FPS: 122"
+text = " FPS: 145"
+
+[node name="CameraPosLabel" type="Label" parent="Control/Panel" unique_id=786647067]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 5.0
+offset_top = -23.0
+offset_right = 141.0
+grow_vertical = 0
+text = "Camera Positon: (3021.7412, 1135.5668, 4717.3345)"
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=2053924107]
 transform = Transform3D(1, 0, 0, 0, 0.07247233, 0.9973704, 0, -0.9973704, 0.07247233, 3117.067, 100, 2313.5452)

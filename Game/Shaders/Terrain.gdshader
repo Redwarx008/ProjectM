@@ -243,7 +243,7 @@ void vertex()
 
 	vec2 uv = vertexCoord / vec2(u_heightmapSize);
 	UV = uv;
-	FixSeams(vertexCoord, VERTEX, UV, u_baseChunkSize * int(chunkScale));
+	//FixSeams(vertexCoord, VERTEX, UV, u_baseChunkSize * int(chunkScale));
 	worldSpacePos = (MODEL_MATRIX * vec4(VERTEX, 1)).xyz;
 	worldSpacePos.xz = min(worldSpacePos.xz, vec2(u_heightmapSize) - vec2(1.0, 1.0));
 

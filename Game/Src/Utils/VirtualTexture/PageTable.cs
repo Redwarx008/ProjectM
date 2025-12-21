@@ -32,6 +32,18 @@ public enum PageStatus
 
 internal class PageTable : IDisposable
 {
+    private struct TableEntry
+    {
+        public short mappingSlot = -1;        // 物理纹理层索引
+        public ushort activeMip = 0;   // 数据的实际 Mip 等级 (用于 Shader 缩放)
+
+        public TableEntry(int mappingSlot, int activeMip)
+        {
+            this.mappingSlot = (short)mappingSlot;
+            this.activeMip = (ushort)activeMip;
+        }
+    }
+
     private sealed class BatchQueue
     {
         private readonly Queue<Batch> _queue = new();
@@ -53,14 +65,11 @@ internal class PageTable : IDisposable
 
     public GDTexture2D[] IndirectTextures { get; private set; }
 
-    // 活跃页面缓存：Key=虚拟页ID, Value=物理图集槽位索引
-    // Capacity 应设置为物理图集的最大页数 (MaxPageCount)
-    private LRUCollection<VirtualPageID, int> _dynamicPages;
 
-    // 加载中集合：只记录 ID，防止重复 I/O
-    private HashSet<VirtualPageID> _loadingPages = [];
 
     private ArrayPool<PageTableUpdateEntry> _arrayPool;
+
+    private TableEntry[][] _cpuTable; //[mip][entry]
 
     private PageTableUpdateEntry[] _currentPendingEntries;
 
@@ -82,6 +91,10 @@ internal class PageTable : IDisposable
 
     private GDBuffer _pageTableUpdateEntriesBuffer = null!;
 
+    private int _l0Width; 
+    private int _l0Height;
+    private int _tileSize;
+
     private bool _pipelineInited;  //todo: 可能并不需要?
 
     public int DynamicPageOffset { get; set; } = int.MaxValue;
@@ -97,7 +110,10 @@ internal class PageTable : IDisposable
         CalculateLayout(l0Width, l0Height, tileSize);
         _arrayPool = ArrayPool<PageTableUpdateEntry>.Create(_maxPageTableUpdateEntry, 2);
         _currentPendingEntries = _arrayPool.Rent(_maxPageTableUpdateEntry);
-        _dynamicPages = new LRUCollection<VirtualPageID, int>(maxPhysicalPages - DynamicPageOffset);
+        _cpuTable = new TableEntry[mipCount][];
+        _l0Width = l0Width;
+        _l0Height = l0Height;
+        _tileSize = tileSize;
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             int width = l0Width;
@@ -128,101 +144,116 @@ internal class PageTable : IDisposable
         SubmitCurrentBatch();
     }
 
-    public PageStatus QueryStatus(VirtualPageID pageID)
+    public void MapPage(VirtualPageID id, int physicalSlot)
     {
-        if(pageID.mip == _persistentMip)
-        {
-            return PageStatus.InVRAM;
-        }
-        if (_dynamicPages.TryGetValue(pageID, out int _))
-        {
-            return PageStatus.InVRAM;
-        }
-        if (_loadingPages.Contains(pageID))
-        {
-            return PageStatus.Loading;
-        }
-        return PageStatus.NotLoaded;
+        // 1. 设置当前页面的状态
+        int idx = GetIndex(id);
+        _cpuTable[id.mip][idx].mappingSlot = (short)physicalSlot;
+        _cpuTable[id.mip][idx].activeMip = (ushort)id.mip;
+
+        AddUpdate(id, physicalSlot, id.mip);
+
+        // 2. 触发 Fallback 更新：向下修正所有依赖此页面的子孙
+        // 这对应 LibVT 中的 mapPageFallbackEntries 逻辑
+        //MapFallback(id, physicalSlot, id.mip);
     }
 
-    public void MarkLoading(VirtualPageID id)
+    /// <summary>
+    /// 对应 LibVT 的页面卸载操作
+    /// </summary>
+    public void UnmapPage(VirtualPageID id)
     {
-        if (id.mip < _persistentMip &&!_dynamicPages.ContainsKey(id))
+        int idx = GetIndex(id);
+        if (_cpuTable[id.mip][idx].mappingSlot == -1) return;
+
+        // 1. 标记自己不再驻留
+        _cpuTable[id.mip][idx].mappingSlot = -1;
+
+        // 2. 向上寻找最近的祖先作为新的 Fallback 来源
+        VirtualPageID fallbackID = id;
+        int fallbackSlot = -1;
+        int fallbackMip = -1;
+
+        for (int m = id.mip + 1; m <= _persistentMip; m++)
         {
-            _loadingPages.Add(id);
+            var ancestor = MapToAncestor(id, m);
+            var entry = _cpuTable[m][GetIndex(ancestor)];
+            if (entry.mappingSlot != - 1)
+            {
+                fallbackSlot = entry.mappingSlot;
+                fallbackMip = entry.activeMip;
+                break;
+            }
+        }
+
+        _cpuTable[id.mip][idx].mappingSlot = (short)fallbackSlot;
+        _cpuTable[id.mip][idx].activeMip = (ushort)fallbackMip;
+
+        AddUpdate(id, fallbackSlot, fallbackMip);
+
+        // 3. 执行回退映射
+        // 对应 LibVT 中的 unmapPageFallbackEntries 逻辑
+        UnmapFallback(id, fallbackSlot, fallbackMip);
+    }
+
+    /// <summary>
+    /// 递归向下修正：当父级变清晰时，所有原本用更模糊祖先的子孙都改用这个父级
+    /// </summary>
+    private void MapFallback(VirtualPageID parentId, int newSlot, int newMip)
+    {
+        if (parentId.mip <= 0) return;
+
+        int childMip = parentId.mip - 1;
+
+        for (int y = parentId.y * 2; y < parentId.y * 2 + 2; y++)
+        {
+            for (int x = parentId.x * 2; x < parentId.x * 2 + 2; x++)
+            {
+                if (!IsValid(childMip, x, y)) continue;
+
+                int childIdx = y * GetMipTilesX(childMip) + x;
+                ref var childEntry = ref _cpuTable[childMip][childIdx];
+
+                // Check activeMip to ensure it's strictly resident
+                if (childEntry.mappingSlot != -1 && childEntry.activeMip == childMip) continue;
+
+                childEntry.mappingSlot = (short)newSlot;
+                childEntry.activeMip = (ushort)newMip;
+                AddUpdate(new VirtualPageID { mip = childMip, x = x, y = y }, newSlot, newMip);
+
+                // 继续向下递归
+                MapFallback(new VirtualPageID { mip = childMip, x = x, y = y }, newSlot, newMip);
+            }
         }
     }
 
     /// <summary>
-    /// 查找最适合淘汰的页面 (最久未使用)
-    /// 返回是否找到，以及 ID 和占用的槽位
+    /// 递归向下回退：当一个页面被卸载，所有依赖它的子孙都要找更上层的老祖宗
     /// </summary>
-    public bool TryGetLRUPage(out VirtualPageID id, out int slot)
+    private void UnmapFallback(VirtualPageID parentPage, int fallbackSlot, int fallbackMip)
     {
-        return _dynamicPages.TryPeekOldest(out id, out slot);
-    }
+        if (parentPage.mip <= 0) return;
 
-    public void ActivatePage(VirtualPageID id, int slot)
-    {
-        _loadingPages.Remove(id);
-       
-        _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
+        int childMip = parentPage.mip - 1;
+        for (int y = parentPage.y * 2; y < parentPage.y * 2 + 2; y++)
         {
-            x = id.x,
-            y = id.y,
-            mip = id.mip,
-            physicalLayer = slot,
-            activeMip = id.mip,
-        };
-        // 只有动态页面需要维护集合
-        if (id.mip < _persistentMip)
-        {
-            Debug.Assert(!_dynamicPages.ContainsKey(id));
-            _dynamicPages.Add(id, slot);
+            for (int x = parentPage.x * 2; x < parentPage.x * 2 + 2; x++)
+            {
+                if (!IsValid(childMip, x, y)) continue;
+
+                int childIdx = y * GetMipTilesX(childMip) + x;
+                ref var childEntry = ref _cpuTable[childMip][childIdx];
+
+                // Check activeMip to ensure it's strictly resident
+                if (childEntry.mappingSlot != -1 && childEntry.activeMip == childMip) continue;
+
+                childEntry.mappingSlot = (short)fallbackSlot;
+                childEntry.activeMip = (ushort)fallbackMip;
+                AddUpdate(new VirtualPageID { mip = childMip, x = x, y = y }, fallbackSlot, fallbackMip);
+
+                UnmapFallback(new VirtualPageID { mip = childMip, x = x, y = y }, fallbackSlot, fallbackMip);
+            }
         }
-    }
-
-    public bool TryEvictOne(out VirtualPageID id, out int slot)
-    {
-        if (_dynamicPages.TryPopOldest(out id, out slot))
-        {
-            DeactivatePage(id);
-            return true;
-        }
-        id = default;
-        slot = -1;
-        return false;
-    }
-
-    private void DeactivatePage(VirtualPageID id)
-    {
-        if (id.mip == _persistentMip) return;
-
-        VirtualPageID ancestorId = MapToAncestor(id, _persistentMip);
-
-        // 3. 更新 GPU 页表指向祖先
-        _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
-        {
-            x = id.x,
-            y = id.y,
-            mip = id.mip,
-            physicalLayer = GetPhysicalSlot(ancestorId),                    // 指向 ancestor 的槽位
-            activeMip = ancestorId.mip,                      // 并告诉 Shader 实际 LOD 是 ancestor 的
-        };
-    }
-
-    public int GetPhysicalSlot(VirtualPageID id)
-    {
-        if (id.mip == _persistentMip)
-        {
-            return id.x + PersistentMipWidth * id.y;
-        }
-
-        if (_dynamicPages.TryGetValue(id, out int slot))
-        {
-            return slot;
-        }
-        return -1;
     }
 
     public void Update()
@@ -318,11 +349,12 @@ internal class PageTable : IDisposable
         // 遍历所有非常驻层级
         int width = l0Width;
         int height = l0Height;
-        for (int mip = 0; mip < _persistentMip; mip++)
+        for (int mip = 0; mip <= _persistentMip; mip++)
         {
             int tileX = (int)Math.Ceiling(width / (float)tileSize);
             int tileY = (int)Math.Ceiling(height / (float)tileSize);
 
+            _cpuTable[mip] = new TableEntry[tileX * tileY];
             for (int y = 0; y < tileY; y++)
             {
                 for (int x = 0; x < tileX; x++)
@@ -335,8 +367,9 @@ internal class PageTable : IDisposable
                     };
 
                     // 查找它的 Root 祖先
-                    // 如果有多个 Root Page，需要计算坐标对应关系
                     VirtualPageID ancestorId = MapToAncestor(id, _persistentMip);
+
+                    int slot = ancestorId.x + PersistentMipWidth * ancestorId.y;
 
                     // 立即添加到 GPU 更新队列
                     _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
@@ -344,8 +377,14 @@ internal class PageTable : IDisposable
                         x = id.x,
                         y = id.y,
                         mip = mip,
-                        physicalLayer = GetPhysicalSlot(ancestorId),
+                        physicalLayer = slot,
                         activeMip = ancestorId.mip,
+                    };
+                    int index = x + y * tileX;
+                    _cpuTable[mip][index] = new TableEntry()
+                    {
+                        mappingSlot = (short)slot,
+                        activeMip = (ushort)ancestorId.mip
                     };
                 }
             }
@@ -403,4 +442,37 @@ internal class PageTable : IDisposable
             y = (int)MathF.Floor((id.y + 0.5f) / scale)
         };
     }
+
+    private void AddUpdate(VirtualPageID id, int slot, int activeMip)
+    {
+        _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
+        {
+            x = id.x,
+            y = id.y,
+            mip = id.mip,
+            physicalLayer = slot,
+            activeMip = activeMip
+        };
+    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetIndex(VirtualPageID id) => id.y * GetMipTilesX(id.mip) + id.x;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetMipTilesX(int mip)
+    {
+        int scale = 1 << mip;
+        int denom = _tileSize * scale;
+        int w = (_l0Width + denom - 1) / denom;
+        return w;
+    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetMipTilesY(int mip)
+    {
+        int scale = 1 << mip;
+        int denom = _tileSize * scale;
+        int h = (_l0Height + denom - 1) / denom;
+        return h;
+    }
+
+    private bool IsValid(int mip, int x, int y) => x >= 0 && x < GetMipTilesX(mip) && y >= 0 && y < GetMipTilesY(mip);
 }

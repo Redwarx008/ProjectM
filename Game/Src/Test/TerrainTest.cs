@@ -12,7 +12,12 @@ public partial class TerrainTest : Node3D
     private Label? _fpsLabel;
 
     [Export]
+    private Label? _cameraPosLabel;
+
+    [Export]
     private Terrain? _terrain;
+
+    private Camera3D _camera;
 
     private MapDefinition _map;
     public async override void _Ready()
@@ -22,6 +27,7 @@ public partial class TerrainTest : Node3D
         if (_terrain != null)
         {
             _terrain.Init(_map);
+            _camera = _terrain.ActiveCamera;
             Logger.Info("terrain init");
         }
     }
@@ -30,6 +36,8 @@ public partial class TerrainTest : Node3D
         base._Process(delta);
         Debug.Assert(_fpsLabel != null);
         _fpsLabel.Text = $" FPS: {Godot.Engine.GetFramesPerSecond()}";
+        var cameraPos = _camera.GlobalPosition;
+        _cameraPosLabel.Text = $"Camera Positon: ({(int)cameraPos.X}, {(int)cameraPos.Y}, {(int)cameraPos.Z})";
     }
 
     public override void _Input(InputEvent @event)

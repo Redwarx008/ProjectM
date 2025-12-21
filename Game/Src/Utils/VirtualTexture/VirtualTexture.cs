@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.ConstrainedExecution;
+using static Godot.HttpRequest;
 using Logger = Core.Logger;
 
 namespace ProjectM;
@@ -49,6 +50,7 @@ public class VirtualTexture : IDisposable
     public static readonly int MaxPageTableMipInGpu = 8;
 
     private PageTable _pageTable;
+    private PageCache _pageCache;
     private PhysicalTexture _physicalTexture;
     private StreamingManager _streamer;
 
@@ -74,6 +76,7 @@ public class VirtualTexture : IDisposable
         TileSize = vTInfo.tileSize;
         Padding = vTInfo.padding;
         _pageTable = new PageTable(Width, Height, TileSize, (int)maxPageCount, MipCount);
+        _pageCache = new PageCache(_pageTable, MipCount, (int)(maxPageCount - _pageTable.DynamicPageOffset));
         _physicalTexture = new PhysicalTexture(maxPageCount, _pageTable.DynamicPageOffset, vTInfo, vtDescs);
         LoadResidentPages();
     }
@@ -90,12 +93,14 @@ public class VirtualTexture : IDisposable
         VirtualPageID cur = id;
         while(cur.mip < MipCount - 1)
         {
-            if (_pageTable.QueryStatus(cur) == PageStatus.NotLoaded)
+            if (_pageCache.TryMarkLoading(cur))
             {
-                _pageTable.MarkLoading(cur);
                 _pendingRequests.Add(cur);
             }
-
+            else
+            {
+                _pageCache.Touch(cur);
+            }
             cur = PageTable.MapToAncestor(cur, cur.mip + 1);
         }
     }
@@ -125,11 +130,7 @@ public class VirtualTexture : IDisposable
             int targetSlot;
             if (result.id.mip == persistentMip)
             {
-                targetSlot = _pageTable.GetPhysicalSlot(result.id);
-
-                _physicalTexture.Upload(result.textureId, targetSlot, result.data);
-
-                _pageTable.ActivatePage(result.id, targetSlot);
+                _pageCache.TryGetPhysicalSlot(result.id, out targetSlot);
 
                 _loadedPersistentCount++;
                 if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
@@ -137,24 +138,32 @@ public class VirtualTexture : IDisposable
                     _persistentReady = true;
                     Logger.Info("[VT] Persistent Pages Ready");
                 }
-                continue;
             }
-
-            if (!_persistentReady)
-                continue;
-
-            if (!_physicalTexture.TryAllocateDynamic(out targetSlot))
+            else
             {
-                // 2. 满了 -> LRU 淘汰
-                if (!_pageTable.TryEvictOne(out var evictedId, out int evictedSlot))
+                if (!_persistentReady)
                     continue;
+                if (!_pageCache.TryGetPhysicalSlot(result.id, out targetSlot))
+                {
+                    if (!_physicalTexture.TryAllocateDynamic(out targetSlot))
+                    {
+                        // 2. 满了 -> LRU 淘汰
+                        if (!_pageCache.EvictOne(out var evictedId, out int evictedSlot))
+                            continue;
+                        _pageTable.UnmapPage(evictedId);
+                        //_physicalTexture.FreeDynamic(evictedSlot); 
+                        targetSlot = evictedSlot;
+                    }
+                }
 
-                //_physicalTexture.FreeDynamic(evictedSlot); 
-                targetSlot = evictedSlot;
+                if(targetSlot != -1)
+                {
+                    _pageCache.Add(result.id, targetSlot);
+                }
             }
-
+            _pageCache.MarkLoadComplete(result.id);
             _physicalTexture.Upload(result.textureId, targetSlot, result.data);
-            _pageTable.ActivatePage(result.id, targetSlot);
+            _pageTable.MapPage(result.id, targetSlot);
         }
     }
 
@@ -173,7 +182,7 @@ public class VirtualTexture : IDisposable
                     y = y,
                     mip = persistentMip,
                 };
-                _pageTable.MarkLoading(id);
+                _pageCache.TryMarkLoading(id);
                 _streamer.RequestPage(id);
             }
         }

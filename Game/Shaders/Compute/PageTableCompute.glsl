@@ -21,17 +21,18 @@ struct PageTableUpdateEntry
 
 layout (set = 0, binding = 1, std430)  buffer PageTableUpdateList
 {
-	uint count;
+	int count;
 	PageTableUpdateEntry data[];
 } pendingPageTableUpdates;
 
 void main()
 {
-	if (gl_GlobalInvocationID.x >= pendingPageTableUpdates.count)
+	int counterDecrement = atomicAdd(pendingPageTableUpdates.count, -1);
+	if (counterDecrement <= 0)
 	{
 		return;
 	}
-	uint index = gl_GlobalInvocationID.x;
+	uint index = uint(counterDecrement - 1);
 	PageTableUpdateEntry entry = pendingPageTableUpdates.data[index];
 	// idk how to avoid this, we can't index with not constant in glsl in AMD device.
 	switch(entry.mip)
