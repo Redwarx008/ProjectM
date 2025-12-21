@@ -1,5 +1,6 @@
 using Godot;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -72,13 +73,16 @@ internal class PhysicalTexture : IDisposable
         _freeSlots.Add(slot);
     }
 
-    public void Upload(int texture, int slot, byte[] data)
+    public void Upload(int texture, int slot, IMemoryOwner<byte> data)
     {
         Debug.Assert(texture >= 0 && texture < _textures.Length);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             var rd = RenderingServer.GetRenderingDevice();
-            rd.TextureUpdate(_textures[texture].Rid, (uint)slot, data);
+            using (data)
+            {
+                rd.TextureUpdate(_textures[texture].Rid, (uint)slot, data.Memory.Span);
+            } 
         }));
     }
 

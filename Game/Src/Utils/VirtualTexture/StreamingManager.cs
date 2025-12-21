@@ -1,5 +1,6 @@
 using Core;
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -23,7 +24,7 @@ internal class StreamingManager : IDisposable
     // 文件路径 -> 加载器实例
     private List<PageLoader> _loaders = [];
 
-    private ConcurrentQueue<(int textureId, VirtualPageID id, byte[] data)> _loadedQueue = new();
+    private ConcurrentQueue<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedQueue = new();
 
     private bool _isRunning = true;
     private Thread _ioThread;
@@ -40,9 +41,9 @@ internal class StreamingManager : IDisposable
         _ioThread.Start();
     }
 
-    public void RegisterFile(string filePath)
+    public void RegisterFile(string filePath, int maxPageLoadedCount)
     {
-        _loaders.Add(new PageLoader(filePath));
+        _loaders.Add(new PageLoader(filePath, maxPageLoadedCount));
     }
 
     public void RequestPage(VirtualPageID id)
@@ -86,7 +87,7 @@ internal class StreamingManager : IDisposable
 
                 for(int i = 0; i < _loaders.Count; ++i)
                 {
-                    byte[]? data = _loaders[i].LoadPage(req.mip, req.x, req.y);
+                    var data = _loaders[i].LoadPage(req.mip, req.x, req.y);
 
                     if (data != null)
                     {
@@ -112,7 +113,7 @@ internal class StreamingManager : IDisposable
         }
     }
 
-    public bool TryGetLoadedPage(out (int textureId, VirtualPageID id, byte[] data) result)
+    public bool TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result)
     {
         return _loadedQueue.TryDequeue(out result);
     }

@@ -1,6 +1,7 @@
 using Core;
 using Godot;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -66,7 +67,7 @@ public class VirtualTexture : IDisposable
         _streamer = new StreamingManager();
         for (int i = 0; i < vtDescs.Length; ++i)
         {
-            _streamer.RegisterFile(vtDescs[i].filePath);
+            _streamer.RegisterFile(vtDescs[i].filePath, (int)maxPageCount);
         }
         var vTInfo = _streamer.GetVTInfo();
         MaxPageCount = (int)maxPageCount;
@@ -125,7 +126,7 @@ public class VirtualTexture : IDisposable
     {
         int persistentMip = MipCount - 1;
         int processLimit = 10;
-        while (processLimit-- > 0 && _streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, byte[] data) result))
+        while (processLimit-- > 0 && _streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result))
         {
             int targetSlot;
             if (result.id.mip == persistentMip)

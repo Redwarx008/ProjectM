@@ -1,5 +1,6 @@
 using Microsoft.Win32.SafeHandles;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -47,7 +48,9 @@ internal class PageLoader : IDisposable
     public int PaddedTileSize => _paddedSize;
     public int RawTileSize => _bytesPerTile;
 
-    public PageLoader(string filePath)
+    private PageBufferAllocator _bufferAllocator;
+
+    public PageLoader(string filePath, int maxPageLoadedCount)
     {
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"VT file not found: {filePath}");
@@ -55,8 +58,8 @@ internal class PageLoader : IDisposable
         FilePath = filePath;
         _fileHandle = File.OpenHandle(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.RandomAccess);
         _fileLength = RandomAccess.GetLength(_fileHandle);
-
         ReadHeaderAndPrecalculateOffsets();
+        _bufferAllocator = new PageBufferAllocator(_bytesPerTile, maxPageLoadedCount);
     }
 
     private void ReadHeaderAndPrecalculateOffsets()
@@ -110,7 +113,7 @@ internal class PageLoader : IDisposable
     /// <param name="x">Tile X Index</param>
     /// <param name="y">Tile Y Index</param>
     /// <returns>包含像素数据的字节数组，如果索引无效返回 null</returns>
-    public byte[]? LoadPage(int mip, int x, int y)
+    public IMemoryOwner<byte>? LoadPage(int mip, int x, int y)
     {
         Debug.Assert(_mipLevelTilesX != null);
         Debug.Assert(_mipLevelFileOffsets != null);
@@ -134,11 +137,17 @@ internal class PageLoader : IDisposable
 
         if (absoluteOffset + _bytesPerTile > _fileLength) return null;
 
-        byte[] buffer = new byte[_bytesPerTile];
+        var owner = _bufferAllocator.Rent();
+        var memory = owner.Memory;
+        Debug.Assert(memory.Length == _bytesPerTile);
+        int bytesRead = RandomAccess.Read(_fileHandle, memory.Span, absoluteOffset);
 
-        int bytesRead = RandomAccess.Read(_fileHandle, buffer, absoluteOffset);
-
-        return bytesRead == _bytesPerTile ? buffer : null;
+        if (bytesRead != _bytesPerTile)
+        {
+            owner.Dispose();
+            return null;
+        }
+        return owner;// 由调用方 Dispose
     }
 
     public void Dispose()
