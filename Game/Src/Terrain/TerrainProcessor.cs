@@ -24,23 +24,6 @@ internal class TerrainProcessor : IDisposable
     
     #endregion
 
-    #region Build Lodmap Resources
-
-    public GDTexture2D? LodMap { get; private set; }
-    
-    private Rid _buildLodMapPipeline;
-    private Rid _buildLodMapSet0;
-    private Rid _buildLodMapShader;
-
-    #endregion
-
-    #region NodeDescriptor Resource
-    private GDBuffer _nodeDescriptorBuffer = null!;
-    private GDBuffer _nodeDescriptorLocationInfoBuffer = null!;
-
-    private Rid _nodeDescriptorSet;
-    #endregion
-
     private int _maxLodNodeX;
     private int _maxLodNodeY;
     private int _leafNodeX;
@@ -113,8 +96,6 @@ internal class TerrainProcessor : IDisposable
         CreateQuadTree(terrain, definition);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            InitNodeDescriptorBuffer();
-            InitBuildLodMapPipeline();
             InitPipeline(terrain, definition);
             Inited = true;
         }));
@@ -175,21 +156,7 @@ internal class TerrainProcessor : IDisposable
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _computePipeline);
             rd.ComputeListBindUniformSet(computeList, _computeSet, 0);
-            rd.ComputeListBindUniformSet(computeList, _nodeDescriptorSet, 1);
             rd.ComputeListDispatch(computeList, (uint)(Math.Ceiling(selectedCount / 64f)), 1, 1);
-            rd.ComputeListEnd();
-        }
-
-        // build lod map pass
-        {
-            var computeList = rd.ComputeListBegin();
-            rd.ComputeListBindComputePipeline(computeList, _buildLodMapPipeline);
-            rd.ComputeListBindUniformSet(computeList, _buildLodMapSet0, 0);
-            rd.ComputeListBindUniformSet(computeList, _nodeDescriptorSet, 1);
-            ReadOnlySpan<byte> pushConstantBytes = MemoryMarshal.AsBytes<int>([_lodCount, 0, 0, 0]);
-            rd.ComputeListSetPushConstant(computeList, pushConstantBytes, (uint)pushConstantBytes.Length);
-            uint nDisPatch = (uint)Math.Ceiling(_leafNodeX / 8f);
-            rd.ComputeListDispatch(computeList, nDisPatch, nDisPatch, 1);
             rd.ComputeListEnd();
         }
     }
@@ -275,106 +242,9 @@ internal class TerrainProcessor : IDisposable
             instancedParamsBinding, drawIndirectBufferBinding, terrainParamsBinding, nodeSelectedInfoBinding
         ], _computeShader, 0);
 
-        // create nodeDescriptorSet
-
-        var nodeDescriptorLocationInfoBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 0
-        };
-        nodeDescriptorLocationInfoBinding.AddId(_nodeDescriptorLocationInfoBuffer);
-
-        var nodeDescriptorBufferBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 1
-        };
-        nodeDescriptorBufferBinding.AddId(_nodeDescriptorBuffer);
-
-        _nodeDescriptorSet = rd.UniformSetCreate(
-            [
-                nodeDescriptorLocationInfoBinding, nodeDescriptorBufferBinding
-            ], _computeShader, 1);
-
         _computePipeline = rd.ComputePipelineCreate(_computeShader);
 
     }
-
-    private void InitNodeDescriptorBuffer()
-    {
-        // build NodeDescriptorLocation buffer
-        var nodeIndexOffsetPerLod = new uint[Terrain.MaxLodCount];
-        var nodeCountPerLod = new uint[Terrain.MaxLodCount * 2];
-        uint offset = 0;
-        for (int lod = Terrain.MaxLodCount - 1; lod >= 0; --lod)
-        {
-            int nodeSize = 1 << lod;
-            uint nodeCountX = (uint)MathF.Ceiling((float)_leafNodeX / (float)nodeSize);
-            uint nodeCountY = (uint)Math.Ceiling((float)_leafNodeY / (float)nodeSize);
-            nodeCountPerLod[lod * 2] = nodeCountX;
-            nodeCountPerLod[lod * 2 + 1] = nodeCountY;
-
-            nodeIndexOffsetPerLod[lod] = offset;
-            offset += nodeCountX * nodeCountY;
-        }
-
-        var data = new uint[nodeIndexOffsetPerLod.Length + nodeCountPerLod.Length];
-        Array.Copy(nodeIndexOffsetPerLod, 0, data, 0, nodeIndexOffsetPerLod.Length);
-        Array.Copy(nodeCountPerLod, 0, data, nodeIndexOffsetPerLod.Length, nodeCountPerLod.Length);
-        ReadOnlySpan<byte> dataBytes = MemoryMarshal.AsBytes<uint>(data);
-        _nodeDescriptorLocationInfoBuffer = GDBuffer.CreateStorage((uint)dataBytes.Length, dataBytes);
-
-        unsafe
-        {
-            _nodeDescriptorBuffer = GDBuffer.CreateStorage(offset * (uint)sizeof(NodeDescriptor));
-        }
-    }
-    
-    private void InitBuildLodMapPipeline()
-    {
-        Debug.Assert(_nodeDescriptorLocationInfoBuffer.Rid != Constants.NullRid);
-        Debug.Assert(_nodeDescriptorBuffer.Rid != Constants.NullRid);
-        CreateLodMap();
-
-        var lodMapBinding = new RDUniform()
-        {
-            UniformType = RenderingDevice.UniformType.Image,
-            Binding = 0
-        };
-        lodMapBinding.AddId(LodMap!.Rid);
-
-
-        _buildLodMapShader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/LodMapCompute.glsl");
-        Debug.Assert(_buildLodMapShader != Constants.NullRid);
-
-        RenderingDevice rd = RenderingServer.GetRenderingDevice();
-
-        _buildLodMapSet0 =
-            rd.UniformSetCreate([lodMapBinding],
-                _buildLodMapShader, 0);
-        Debug.Assert(_buildLodMapSet0 != Constants.NullRid);
-
-        _buildLodMapPipeline = rd.ComputePipelineCreate(_buildLodMapShader);
-    }
-    
-    private void CreateLodMap()
-    {
-        Debug.Assert(_planeMesh != null && _planeMesh.Material != null);
-
-        var desc = new GDTextureDesc()
-        {
-            Width = (uint)_leafNodeX,
-            Height = (uint)_leafNodeY,
-            Format = RenderingDevice.DataFormat.R8Unorm,
-            Mipmaps = 1,
-            UsageBits = RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.StorageBit |
-                        RenderingDevice.TextureUsageBits.CanCopyToBit |
-                        RenderingDevice.TextureUsageBits.CanCopyFromBit
-        };
-        LodMap = GDTexture2D.Create(desc);
-        _planeMesh.Material.SetShaderParameter("u_lodmap", LodMap.ToTexture2d());
-    }
-
     private void CreateQuadTree(Terrain terrain, MapDefinition definition)
     {
         Debug.Assert(terrain.ActiveCamera != null);
@@ -394,18 +264,9 @@ internal class TerrainProcessor : IDisposable
 
             _nodeSelectedInfoBuffer.Dispose();
 
-            _nodeDescriptorLocationInfoBuffer.Dispose();
-            _nodeDescriptorBuffer.Dispose();
-            if (LodMap != null)
-            {
-                LodMap.Dispose();
-            }
-
             RenderingDevice rd = RenderingServer.GetRenderingDevice();
             //rd.FreeRid(_computePipeline);
             rd.FreeRid(_computeShader);
-            //rd.FreeRid(_buildLodMapPipeline);
-            rd.FreeRid(_buildLodMapShader);
         }));
     }
 
@@ -417,7 +278,7 @@ internal class TerrainProcessor : IDisposable
         for (int i = 0; i < nodeSelectedCount; ++i)
         {
             var nodeInfo = nodeSelectedList[i];
-            RequestPageForNode((int)nodeInfo.LodLevel, (int)nodeInfo.X, (int)nodeInfo.Y);
+            RequestPageForNode((int)nodeInfo.lodLevel, (int)nodeInfo.x, (int)nodeInfo.y);
         }
         _geometricVT.Update();
     }

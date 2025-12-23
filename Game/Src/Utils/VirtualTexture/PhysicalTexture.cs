@@ -18,6 +18,8 @@ internal class PhysicalTexture : IDisposable
 
     private int _reservedCount;
 
+    private List<(int texture, int slot, IMemoryOwner<byte> data)> _pendingUpdateEntries = [];
+
     public GDTexture2DArray this[int i] => _textures[i];
 
     public PhysicalTexture(uint maxPageCount, int reservedSlotCount, VTInfo vTInfo, VirtualTextureDesc[] vtDescs)
@@ -71,6 +73,20 @@ internal class PhysicalTexture : IDisposable
             throw new InvalidOperationException($"Cannot free reserved slot {slot}");
         Debug.Assert(!_freeSlots.Contains(slot));
         _freeSlots.Add(slot);
+    }
+
+    public void Update()
+    {
+        foreach (var entry in _pendingUpdateEntries)
+        {
+            Upload(entry.texture, entry.slot, entry.data);
+        }
+        _pendingUpdateEntries.Clear();
+    }
+
+    public void AddUpdate(int texture, int slot, IMemoryOwner<byte> data)
+    {
+        _pendingUpdateEntries.Add((texture, slot, data));
     }
 
     public void Upload(int texture, int slot, IMemoryOwner<byte> data)

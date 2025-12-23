@@ -87,6 +87,7 @@ public class VirtualTexture : IDisposable
         FlushPageRequests();
         ProcessLoadedPages();
         _pageTable.Update();
+        _physicalTexture.Update();
     }
 
     public void RequestPage(VirtualPageID id)
@@ -163,7 +164,7 @@ public class VirtualTexture : IDisposable
                 }
             }
             _pageCache.MarkLoadComplete(result.id);
-            _physicalTexture.Upload(result.textureId, targetSlot, result.data);
+            _physicalTexture.AddUpdate(result.textureId, targetSlot, result.data);
             _pageTable.MapPage(result.id, targetSlot);
         }
     }

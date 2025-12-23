@@ -71,7 +71,8 @@ vec3 GetVirtualTextureUV(vec2 globalUv, int requestMip)
 	uint activeLod = pageInfo.y;
 	// 当前 Active LOD 下，整个地形被切分为 gridDimX * gridDimY 个页面
 	ivec2 gridDim = PageTableSize(activeLod);
-	vec2 uvInPage = fract(globalUv * vec2(gridDim));
+    vec2 clampedUv = clamp(globalUv, 0.0, 1.0 - 1e-7);
+    vec2 uvInPage = fract(clampedUv * vec2(gridDim));
 	vec2 paddedPageSize = vec2(textureSize(u_VTPhysicalHeightmap, 0).xy);
 	vec2 pageSize = paddedPageSize -  2.0 * vec2(float(u_PagePadding));
 	// 算出在Physical纹理上的像素坐标 (加上左上角的 Padding)
@@ -107,109 +108,6 @@ int GetBlockLod(ivec2 index)
 
 	return int(level);
 }
-void FixSeams(vec2 vertexWorldPos, inout vec3 vertex, inout vec2 uv, int blockSize)
-{
-	ivec2 blockIndex = ivec2(floor((vertexWorldPos.xy + vec2(0.01, 0.01)))/ vec2(float(u_baseChunkSize), float((u_baseChunkSize))));
-	//Because the right boundary belongs to the right block
-	if(int(vertex.x) == blockSize)
-	{
-		blockIndex.x -= 1;
-	}
-	//Because the bottom boundary belongs to the bottom block
-	if(int(vertex.z) == blockSize)
-	{
-		blockIndex.y -= 1;
-	}
-	int level = GetBlockLod(blockIndex);
-	int leftLevel = GetBlockLod(blockIndex + ivec2(-1, 0));
-	int rightLevel = GetBlockLod(blockIndex + ivec2(1, 0));
-	int topLevel = GetBlockLod(blockIndex + ivec2(0, -1));
-	int bottomLevel = GetBlockLod(blockIndex + ivec2(0, 1));
-
-	//float debug;
-	//if(level == 0)
-		//color = vec4(1, 0, 0, 1);  //red
-	//else if(level == 1)
-		//color = vec4(0, 1, 0, 1);  //green
-	//else if(level == 2)
-		//color = vec4(0, 0, 1, 1);  //blue
-	//else if(level == 3)
-		//color = vec4(1, 0, 1, 1);  //pink
-	//else if(level == 4)
-		//color = vec4(1, 1, 0, 1); //yellow
-	//else if(level == 5)
-		//color = vec4(1, 1, 1, 1);  //white
-
-	int blockStride = 1 << level;
-	vec2 uvStride = float(blockStride) / vec2(u_heightmapSize);
-	//int blockStrideCount = u_blockSize / blockStride;
-	ivec2 vertexIndex = ivec2(floor(vertex.xz + vec2(0.01, 0.01))) / ivec2(blockStride, blockStride);
-	int levelDiff = leftLevel - level;
-
-	if(int(vertex.x) == 0 && levelDiff > 0)
-	{
-		//vertex.y = 20.0;
-		int gridStride = 1 << levelDiff;
-		int modIndex = vertexIndex.y % gridStride;
-		if(modIndex != 0)
-		{
-			vertex.z += float(gridStride - modIndex) * float(blockStride);
-			uv.y +=  uvStride.y * float(gridStride - modIndex) ;
-		}
-		return;
-	}
-	//top
-	levelDiff = topLevel - level;
-	if(int(vertex.z) == 0 && levelDiff > 0)
-	{
-		//vertex.y = 20.0;
-		int gridStride = 1 << levelDiff;
-		//vertex.y = float(grid_stride) * 10.0;
-		int modIndex = vertexIndex.x % gridStride;
-		if(modIndex != 0)
-		{
-			vertex.x -= float(modIndex) * float(blockStride);
-			uv.x -= uvStride.x * float(modIndex) ;
-		}
-		return;
-	}
-	//right
-	levelDiff = rightLevel - level;
-	if(int(vertex.x) == blockSize && levelDiff > 0)
-	{
-		int gridStride = 1 << levelDiff;
-		int modIndex = vertexIndex.y % gridStride;
-		if(modIndex != 0)
-		{
-			vertex.z += float(gridStride - modIndex) * float(blockStride);
-			uv.y +=  uvStride.y * float(gridStride - modIndex) ;
-		}
-		return;
-	}
-	//bottom
-	levelDiff = bottomLevel - level;
-	if(int(vertex.z) == blockSize && levelDiff > 0)
-	{
-		int gridStride = 1 << levelDiff;
-		int modIndex = vertexIndex.x % gridStride;
-		if(modIndex != 0)
-		{
-			vertex.x -= float(modIndex) * float(blockStride);
-			uv.x -= uvStride.x * float(modIndex);
-		}
-		return;
-	}
-
-}
-vec3 CalculateNormal(vec2 uv)
-{
-	vec2 texelSize = 1.0 / vec2(textureSize(u_heightmap, 0));
-	float left = textureLod(u_heightmap, uv + vec2(-texelSize.x, 0), 0).r * u_heightScale;
-	float right = textureLod(u_heightmap, uv + vec2(texelSize.x, 0), 0).r * u_heightScale;
-	float up = textureLod(u_heightmap, uv + vec2(0, -texelSize.y), 0).r * u_heightScale;
-	float down = textureLod(u_heightmap, uv + vec2(0, texelSize.y), 0).r * u_heightScale;
-	return normalize(vec3(left - right, 2.0, up - down));
-}
 
 vec4 DebugColor(vec2 globalUV, int requestMip)
 {
@@ -228,33 +126,11 @@ vec4 DebugColor(vec2 globalUV, int requestMip)
 	}
 }
 
-int ResolveHeightMipForVertex(
-    ivec2 blockIndex,
-    ivec2 vertexInBlock,
-    int blockSize,
-    int selfLod
-) {
-    int forcedLod = selfLod;
-
-    if(vertexInBlock.x == 0) {
-        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(-1, 0)));
-    }
-    if(vertexInBlock.x == blockSize) {
-        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(1, 0)));
-    }
-    if(vertexInBlock.y == 0) {
-        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(0, -1)));
-    }
-    if(vertexInBlock.y == blockSize) {
-        forcedLod = max(forcedLod, GetBlockLod(blockIndex + ivec2(0, 1)));
-    }
-
-    return forcedLod;
-}
 
 void vertex()
 {
 	int lodLevel = int(INSTANCE_CUSTOM.x);
+	float morphValue = INSTANCE_CUSTOM.y;
 	//ivec2 nodeXY = ivec2(int(INSTANCE_CUSTOM.z), int(INSTANCE_CUSTOM.w));
 	float chunkScale = float(1 << lodLevel);
 	VERTEX.xz *= chunkScale;
@@ -267,52 +143,24 @@ void vertex()
 
 	vec2 uv = vertexCoord / vec2(u_heightmapSize);
 	UV = uv;
-	FixSeams(vertexCoord, VERTEX, UV, u_baseChunkSize * int(chunkScale));
+
 	worldSpacePos = (MODEL_MATRIX * vec4(VERTEX, 1)).xyz;
 	worldSpacePos.xz = min(worldSpacePos.xz, vec2(u_heightmapSize) - vec2(1.0, 1.0));
-
-	ivec2 blockIndex = ivec2(floor(worldSpacePos.xz / float(u_baseChunkSize)));
-	ivec2 vertexInBlock = ivec2(VERTEX.xz);
-
-	int resolvedLod = ResolveHeightMipForVertex(
-	    blockIndex,
-	    vertexInBlock,
-	    u_baseChunkSize * int(chunkScale),
-	    lodLevel
-	);
-
-	v_RequestHeightMip = max(resolvedLod - u_HeightmapLodOffset, 0);
 
 	//v_debugColor = DebugColor(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
 
 	//float height = textureLod(u_heightmap, worldSpacePos.xz / vec2(u_heightmapSize), 0).r * u_heightScale;
 
+	v_RequestHeightMip = max(lodLevel - u_HeightmapLodOffset, 0);
 	float height = SampleHeightVT(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
-	worldSpacePos.y = height;
+	if(v_RequestHeightMip != 0)
+	{
+		float heightLowRes = SampleHeightVT(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip + 1);
+		height = mix(heightLowRes, height, morphValue);
+	}
+
+	//worldSpacePos.y = height;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldSpacePos, 1);
-	//
-	//switch(lodLevel)
-	//{
-	//case 0:
-		//v_debugColor = vec3(0, 1, 0);
-		//break;
-	//case 1:
-		//v_debugColor = vec3(0, 0, 1);
-		//break;
-	//case 2:
-		//v_debugColor = vec3(1, 0, 0);
-		//break;
-	//case 3:
-		//v_debugColor = vec3(1, 1, 0);
-		//break;
-	//case 4:
-		//v_debugColor = vec3(0, 1, 1);
-		//break;
-	//case 5:
-		//v_debugColor = vec3(1, 0, 1);
-		//break;
-	//}
-	//v_debugColor = vec3(1, 1, 0);
 }
 
 void fragment()
@@ -320,7 +168,9 @@ void fragment()
 	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
 	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, v_RequestHeightMip);
 	worldNormal = normalize(worldNormal);
-	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
-	ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
+	//NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
+	vec3 virtualTextureUV = GetVirtualTextureUV(UV, v_RequestHeightMip);
+	ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
+	//ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
 	//ALBEDO *= v_debugColor.rgb;
 }

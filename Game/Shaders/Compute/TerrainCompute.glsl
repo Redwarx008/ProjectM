@@ -38,7 +38,7 @@ struct NodeSelectedInfo
 	uvec2 position;
 	vec2 minMaxHeight;
 	uint lodLevel;
-	uint subdivided;
+	float morphValue;
 };
 
 layout(set = 0, binding = 2) uniform TerrainParams
@@ -53,26 +53,6 @@ layout(set = 0, binding = 3, std430) buffer PendingNodeSelectedList
 } pendingNodeList;
 
 
-layout (set = 1, binding = 0, std430) buffer NodeDescriptorLocationInfo
-{
-	uint nodeIndexOffsetPerLod[10];
-	uvec2 nodeCountPerLod[10];
-};
-
-struct NodeDescriptor
-{
-	uint subdivided;
-};
-
-layout (set = 1, binding = 1, std430) buffer NodeDescriptorBuffer
-{
-	NodeDescriptor nodeDescriptors[];
-};
-
-uint getNodeDescIndex(uvec2 nodeLocation, uint lod)
-{
-	return nodeIndexOffsetPerLod[lod] + nodeLocation.y * nodeCountPerLod[lod].x + nodeLocation.x;
-}
 
 void main()
 {
@@ -84,22 +64,16 @@ void main()
 
 	uvec2 nodeXY = pendingNodeList.data[index].position;
 	uint lodLevel = pendingNodeList.data[index].lodLevel;
-	if(pendingNodeList.data[index].subdivided == 0)
-	{
-		uint nodeSize = leafNodeSize << pendingNodeList.data[index].lodLevel;
-		uvec2 nodeStartXY = nodeXY * nodeSize;
-		vec2 minMaxHeight = pendingNodeList.data[index].minMaxHeight;
 
-		// set draw indirect buffer 
-		uint instanceIndex = atomicAdd(drawIndirectCommand.instanceCount, 1);
+	uint nodeSize = leafNodeSize << pendingNodeList.data[index].lodLevel;
+	uvec2 nodeStartXY = nodeXY * nodeSize;
+	vec2 minMaxHeight = pendingNodeList.data[index].minMaxHeight;
+	float morphValue = pendingNodeList.data[index].morphValue;
+	// set draw indirect buffer 
+	uint instanceIndex = atomicAdd(drawIndirectCommand.instanceCount, 1);
 
-		instancedParams.data[instanceIndex].rowMajorMatrix[0] = vec4(1, 0, 0, float(nodeStartXY.x));
-		instancedParams.data[instanceIndex].rowMajorMatrix[1] = vec4(0, 1, 0, 0);
-		instancedParams.data[instanceIndex].rowMajorMatrix[2] = vec4(0, 0, 1, float(nodeStartXY.y));
-		instancedParams.data[instanceIndex].customData = vec4(float(lodLevel), float(nodeXY.x), float(nodeXY.y), 0);		
-	}
-
-	// Fill NodeDescriptor buffer
-	uint nodeIndex = getNodeDescIndex(nodeXY,  pendingNodeList.data[index].lodLevel);
-	nodeDescriptors[nodeIndex].subdivided = pendingNodeList.data[index].subdivided;
+	instancedParams.data[instanceIndex].rowMajorMatrix[0] = vec4(1, 0, 0, float(nodeStartXY.x));
+	instancedParams.data[instanceIndex].rowMajorMatrix[1] = vec4(0, 1, 0, 0);
+	instancedParams.data[instanceIndex].rowMajorMatrix[2] = vec4(0, 0, 1, float(nodeStartXY.y));
+	instancedParams.data[instanceIndex].customData = vec4(float(lodLevel), morphValue, 0, 0);	
 }

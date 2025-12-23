@@ -13,12 +13,12 @@ public class TerrainQuadTree
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct NodeSelectedInfo
     {
-        public uint X;
-        public uint Y;
-        public float MinHeight;
-        public float MaxHeight;
-        public uint LodLevel;
-        public uint Subdivided;
+        public uint x;
+        public uint y;
+        public float minHeight;
+        public float maxHeight;
+        public uint lodLevel;
+        public float morphValue;
     }
 
     public ref struct SelectDesc
@@ -85,26 +85,18 @@ public class TerrainQuadTree
         {
             selectDesc.nodeSelectedInfos[selectDesc.nodeSelectedCount++] = new NodeSelectedInfo
             {
-                X = (uint)nodeX,
-                Y = (uint)nodeY,
-                MinHeight = minZ,
-                MaxHeight = maxZ,
-                LodLevel = (uint)lodLevel,
-                Subdivided = 0,
+                x = (uint)nodeX,
+                y = (uint)nodeY,
+                minHeight = minZ,
+                maxHeight = maxZ,
+                lodLevel = (uint)lodLevel,
+                morphValue = 2 * maxScreenSpaceError / selectDesc.tolerableError - 1,
             };
 
             return;
         }
         else
         {
-            selectDesc.nodeSelectedInfos[selectDesc.nodeSelectedCount++] = new NodeSelectedInfo
-            {
-                X = (uint)nodeX,
-                Y = (uint)nodeY,
-                LodLevel = (uint)lodLevel,
-                Subdivided = 1,
-            };
-
             bool weAreCompletelyInFrustum = cullResult == IntersectType.Inside;
 
             _minMaxErrorMaps[lodLevel - 1].GetSubNodesExist(nodeX, nodeY,
