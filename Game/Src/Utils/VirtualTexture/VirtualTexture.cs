@@ -147,7 +147,7 @@ public class VirtualTexture : IDisposable
                     continue;
                 if (!_pageCache.TryGetPhysicalSlot(result.id, out targetSlot))
                 {
-                    if (!_physicalTexture.TryAllocateDynamic(out targetSlot))
+                    if (!_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
                     {
                         // 2. 满了 -> LRU 淘汰
                         if (!_pageCache.EvictOne(out var evictedId, out int evictedSlot))

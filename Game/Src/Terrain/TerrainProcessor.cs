@@ -13,10 +13,12 @@ internal class TerrainProcessor : IDisposable
 {
     #region Compute Resources
 
-    private GDBuffer _drawIndirectBuffer = null!;
-    private GDBuffer _nodeSelectedInfoBuffer = null!;
-    private GDBuffer _instancedParamsBuffer = null!;
+    private GDBuffer _planeIndirectBuffer = null!;
+    private GDBuffer _planeInstancedBuffer = null!;
+    private GDBuffer _skirtIndirectBuffer = null!;
+    private GDBuffer _skirtInstancedBuffer = null!;
     private GDBuffer _terrainParamsBuffer = null!;
+    private GDBuffer _nodeSelectedInfoBuffer = null!;
 
     private Rid _computePipeline;
     private Rid _computeSet;
@@ -37,6 +39,8 @@ internal class TerrainProcessor : IDisposable
     private TerrainQuadTree? _quadTree;
 
     private TerrainMesh? _planeMesh;
+
+    private TerrainMesh? _skirtMesh;
 
     private VirtualTexture? _geometricVT; // height or normal
 
@@ -76,10 +80,11 @@ internal class TerrainProcessor : IDisposable
 
     #endregion
 
-    public TerrainProcessor(Terrain terrain, TerrainMesh? mesh, MapDefinition definition)
+    public TerrainProcessor(Terrain terrain, TerrainMesh? planeMesh, TerrainMesh? skirtMesh, MapDefinition definition)
     {
         _terrain = terrain;
-        _planeMesh = mesh;
+        _planeMesh = planeMesh;
+        _skirtMesh = skirtMesh;
         _geometricVT = terrain.GeometricVT;
         TolerableError = definition.TerrainTolerableError;
         _cachedDispatchCallback = Callable.From(() =>
@@ -139,7 +144,8 @@ internal class TerrainProcessor : IDisposable
     {
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
-        rd.BufferClear(_drawIndirectBuffer, 4, 4);
+        rd.BufferClear(_planeIndirectBuffer, 4, 4);
+        rd.BufferClear(_skirtIndirectBuffer, 4, 4);
 
         unsafe
         {
@@ -174,19 +180,21 @@ internal class TerrainProcessor : IDisposable
     
     private void InitPipeline(Terrain terrain, MapDefinition definition)
     {   
-        Debug.Assert(_planeMesh != null);
+        Debug.Assert(_planeMesh != null && _skirtMesh != null);
         Debug.Assert(terrain.Data.Heightmap != null);
 
         GDTexture2D heightmap = terrain.Data.Heightmap;
-        _instancedParamsBuffer = GDBuffer.CreateManaged(_planeMesh.GetInstanceBuffer());
-        _drawIndirectBuffer = GDBuffer.CreateManaged(_planeMesh.GetDrawIndirectBuffer());
+        _planeInstancedBuffer = GDBuffer.CreateManaged(_planeMesh.GetInstanceBuffer());
+        _planeIndirectBuffer = GDBuffer.CreateManaged(_planeMesh.GetDrawIndirectBuffer());
+        _skirtInstancedBuffer = GDBuffer.CreateManaged(_skirtMesh.GetInstanceBuffer());
+        _skirtIndirectBuffer = GDBuffer.CreateManaged(_skirtMesh.GetDrawIndirectBuffer());
 
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
         uint meshIndexCount = terrain.LeafNodeSize * terrain.LeafNodeSize * 6;
         ReadOnlySpan<byte> indexCount = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref meshIndexCount, 1));
-        rd.BufferUpdate(_drawIndirectBuffer, 0, sizeof(uint), indexCount);
-
+        rd.BufferUpdate(_planeIndirectBuffer, 0, sizeof(uint), indexCount);
+        rd.BufferUpdate(_skirtIndirectBuffer, 0, sizeof(uint), indexCount);
         // create Buffers
 
         var terrainParams = new TerrainParams()
@@ -209,37 +217,53 @@ internal class TerrainProcessor : IDisposable
         // create pipeline
         _computeShader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/TerrainCompute.glsl");
 
-        var instancedParamsBinding = new RDUniform()
+        var planeInstancedParamsBinding = new RDUniform()
         {
             UniformType = RenderingDevice.UniformType.StorageBuffer,
             Binding = 0
         };
-        instancedParamsBinding.AddId(_instancedParamsBuffer);
+        planeInstancedParamsBinding.AddId(_planeInstancedBuffer);
 
-        var drawIndirectBufferBinding = new RDUniform()
+        var skirtInstancedParamsBinding = new RDUniform()
         {
             UniformType = RenderingDevice.UniformType.StorageBuffer,
             Binding = 1
         };
-        drawIndirectBufferBinding.AddId(_drawIndirectBuffer);
+        skirtInstancedParamsBinding.AddId(_skirtInstancedBuffer);
+
+        var planeIndirectBufferBinding = new RDUniform()
+        {
+            UniformType = RenderingDevice.UniformType.StorageBuffer,
+            Binding = 2
+        };
+        planeIndirectBufferBinding.AddId(_planeIndirectBuffer);
+
+        var skirtIndirectBufferBinding = new RDUniform()
+        {
+            UniformType = RenderingDevice.UniformType.StorageBuffer,
+            Binding = 3
+        };
+        skirtIndirectBufferBinding.AddId(_skirtIndirectBuffer);
 
         var terrainParamsBinding = new RDUniform()
         {
             UniformType = RenderingDevice.UniformType.UniformBuffer,
-            Binding = 2
+            Binding = 4
         };
         terrainParamsBinding.AddId(_terrainParamsBuffer);
 
         var nodeSelectedInfoBinding = new RDUniform()
         {
             UniformType = RenderingDevice.UniformType.StorageBuffer,
-            Binding = 3
+            Binding = 5
         };
         nodeSelectedInfoBinding.AddId(_nodeSelectedInfoBuffer);
 
         _computeSet = rd.UniformSetCreate(
         [
-            instancedParamsBinding, drawIndirectBufferBinding, terrainParamsBinding, nodeSelectedInfoBinding
+            planeInstancedParamsBinding, skirtInstancedParamsBinding, 
+            planeIndirectBufferBinding, skirtIndirectBufferBinding, 
+            terrainParamsBinding, nodeSelectedInfoBinding
         ], _computeShader, 0);
 
         _computePipeline = rd.ComputePipelineCreate(_computeShader);
@@ -260,7 +284,7 @@ internal class TerrainProcessor : IDisposable
     {
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            _drawIndirectBuffer.Dispose();
+            _planeIndirectBuffer.Dispose();
 
             _nodeSelectedInfoBuffer.Dispose();
 

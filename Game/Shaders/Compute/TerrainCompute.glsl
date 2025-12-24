@@ -13,10 +13,16 @@ struct InstancedParam
 	vec4 customData;
 };
 
-layout(set = 0, binding = 0) buffer InstancedParams
+layout(set = 0, binding = 0) buffer PlaneInstancedParams
 {
 	InstancedParam data[];
-} instancedParams;
+} planeInstancedParams;
+
+layout(set = 0, binding = 1) buffer SkirtInstancedParams
+{
+	InstancedParam data[];
+} skirtInstancedParams;
+
 
 struct DrawIndexedIndirectCommand
 {
@@ -28,25 +34,29 @@ struct DrawIndexedIndirectCommand
 };
 
 // Same layout as VkDrawIndexedIndirectCommand
-layout (set = 0, binding = 1, std430)  buffer DrawIndexedIndirectCommandBuffer
+layout (set = 0, binding = 2, std430)  buffer PlaneDrawIndexedIndirectCommandBuffer
 {
-	DrawIndexedIndirectCommand drawIndirectCommand;
-};
+	DrawIndexedIndirectCommand command;
+} planeDrawCommand;
+
+layout (set = 0, binding = 3, std430)  buffer SkirtDrawIndexedIndirectCommandBuffer
+{
+	DrawIndexedIndirectCommand command;
+} skirtDrawCommand;
 
 struct NodeSelectedInfo
 {
 	uvec2 position;
-	vec2 minMaxHeight;
 	uint lodLevel;
 	float morphValue;
 };
 
-layout(set = 0, binding = 2) uniform TerrainParams
+layout(set = 0, binding = 4) uniform TerrainParams
 {
 	uint leafNodeSize;
 };
 
-layout(set = 0, binding = 3, std430) buffer PendingNodeSelectedList 
+layout(set = 0, binding = 5, std430) buffer PendingNodeSelectedList 
 {
 	int count;
 	NodeSelectedInfo data[];
@@ -67,13 +77,19 @@ void main()
 
 	uint nodeSize = leafNodeSize << pendingNodeList.data[index].lodLevel;
 	uvec2 nodeStartXY = nodeXY * nodeSize;
-	vec2 minMaxHeight = pendingNodeList.data[index].minMaxHeight;
 	float morphValue = pendingNodeList.data[index].morphValue;
 	// set draw indirect buffer 
-	uint instanceIndex = atomicAdd(drawIndirectCommand.instanceCount, 1);
+	uint planeInstanceIndex = atomicAdd(planeDrawCommand.command.instanceCount, 1);
 
-	instancedParams.data[instanceIndex].rowMajorMatrix[0] = vec4(1, 0, 0, float(nodeStartXY.x));
-	instancedParams.data[instanceIndex].rowMajorMatrix[1] = vec4(0, 1, 0, 0);
-	instancedParams.data[instanceIndex].rowMajorMatrix[2] = vec4(0, 0, 1, float(nodeStartXY.y));
-	instancedParams.data[instanceIndex].customData = vec4(float(lodLevel), morphValue, 0, 0);	
+	planeInstancedParams.data[planeInstanceIndex].rowMajorMatrix[0] = vec4(1, 0, 0, float(nodeStartXY.x));
+	planeInstancedParams.data[planeInstanceIndex].rowMajorMatrix[1] = vec4(0, 1, 0, 0);
+	planeInstancedParams.data[planeInstanceIndex].rowMajorMatrix[2] = vec4(0, 0, 1, float(nodeStartXY.y));
+	planeInstancedParams.data[planeInstanceIndex].customData = vec4(float(lodLevel), morphValue, 0, 0);	
+
+	uint skirtInstanceIndex = atomicAdd(skirtDrawCommand.command.instanceCount, 1);
+
+	skirtInstancedParams.data[skirtInstanceIndex].rowMajorMatrix[0] = vec4(1, 0, 0, float(nodeStartXY.x));
+	skirtInstancedParams.data[skirtInstanceIndex].rowMajorMatrix[1] = vec4(0, 1, 0, 0);
+	skirtInstancedParams.data[skirtInstanceIndex].rowMajorMatrix[2] = vec4(0, 0, 1, float(nodeStartXY.y));
+	skirtInstancedParams.data[skirtInstanceIndex].customData = vec4(float(lodLevel), morphValue, 0, 0);	
 }

@@ -146,16 +146,15 @@ internal class PageTable : IDisposable
 
     public void MapPage(VirtualPageID id, int physicalSlot)
     {
-        // 1. 设置当前页面的状态
+        // 设置当前页面的状态
         int idx = GetIndex(id);
         _cpuTable[id.mip][idx].mappingSlot = (short)physicalSlot;
         _cpuTable[id.mip][idx].activeMip = (ushort)id.mip;
 
         AddUpdate(id, physicalSlot, id.mip);
 
-        // 2. 触发 Fallback 更新：向下修正所有依赖此页面的子孙
-        // 这对应 LibVT 中的 mapPageFallbackEntries 逻辑
-        //MapFallback(id, physicalSlot, id.mip);
+        // 触发 Fallback 更新：向下修正所有依赖此页面的子孙
+        MapFallback(id, physicalSlot, id.mip);
     }
 
     /// <summary>
@@ -166,10 +165,10 @@ internal class PageTable : IDisposable
         int idx = GetIndex(id);
         if (_cpuTable[id.mip][idx].mappingSlot == -1) return;
 
-        // 1. 标记自己不再驻留
+        // 标记自己不再驻留
         _cpuTable[id.mip][idx].mappingSlot = -1;
 
-        // 2. 向上寻找最近的祖先作为新的 Fallback 来源
+        // 向上寻找最近的祖先作为新的 Fallback 来源
         VirtualPageID fallbackID = id;
         int fallbackSlot = -1;
         int fallbackMip = -1;
@@ -191,8 +190,7 @@ internal class PageTable : IDisposable
 
         AddUpdate(id, fallbackSlot, fallbackMip);
 
-        // 3. 执行回退映射
-        // 对应 LibVT 中的 unmapPageFallbackEntries 逻辑
+        // 执行回退映射
         UnmapFallback(id, fallbackSlot, fallbackMip);
     }
 
@@ -372,14 +370,7 @@ internal class PageTable : IDisposable
                     int slot = ancestorId.x + PersistentMipWidth * ancestorId.y;
 
                     // 立即添加到 GPU 更新队列
-                    _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
-                    {
-                        x = id.x,
-                        y = id.y,
-                        mip = mip,
-                        physicalLayer = slot,
-                        activeMip = ancestorId.mip,
-                    };
+                    AddUpdate(id, slot, ancestorId.mip);
                     int index = x + y * tileX;
                     _cpuTable[mip][index] = new TableEntry()
                     {
@@ -443,8 +434,13 @@ internal class PageTable : IDisposable
         };
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AddUpdate(VirtualPageID id, int slot, int activeMip)
     {
+        if (_currentPendingCount >= _maxPageTableUpdateEntry)
+        {
+            SubmitCurrentBatch();
+        }
         _currentPendingEntries[_currentPendingCount++] = new PageTableUpdateEntry
         {
             x = id.x,

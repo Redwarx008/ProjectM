@@ -15,8 +15,6 @@ public class TerrainQuadTree
     {
         public uint x;
         public uint y;
-        public float minHeight;
-        public float maxHeight;
         public uint lodLevel;
         public float morphValue;
     }
@@ -87,8 +85,6 @@ public class TerrainQuadTree
             {
                 x = (uint)nodeX,
                 y = (uint)nodeY,
-                minHeight = minZ,
-                maxHeight = maxZ,
                 lodLevel = (uint)lodLevel,
                 morphValue = 2 * maxScreenSpaceError / selectDesc.tolerableError - 1,
             };

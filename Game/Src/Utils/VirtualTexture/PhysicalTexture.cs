@@ -55,7 +55,7 @@ internal class PhysicalTexture : IDisposable
         }));
     }
 
-    public bool TryAllocateDynamic(out int slot)
+    public bool TryAllocateDynamicSlot(out int slot)
     {
         if (_freeSlots.Count > 0)
         {
@@ -67,7 +67,7 @@ internal class PhysicalTexture : IDisposable
         return false;
     }
 
-    public void FreeDynamic(int slot)
+    public void FreeSlot(int slot)
     {
         if (slot < _reservedCount)
             throw new InvalidOperationException($"Cannot free reserved slot {slot}");

@@ -31,7 +31,3 @@ project/solution_directory=".."
 [physics]
 
 3d/physics_engine="Jolt Physics"
-
-[rendering]
-
-driver/depth_prepass/enable=false

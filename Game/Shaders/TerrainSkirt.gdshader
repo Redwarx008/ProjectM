@@ -153,6 +153,8 @@ void vertex()
 	height = mix(lowResHeight, height, morphVal);
 
 	worldSpacePos.y = height;
+	float skirtHeihgt = -u_heightScale / 10.0;
+	worldSpacePos.y += skirtHeihgt * float(VERTEX_ID % 2);
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldSpacePos, 1);
 }
 

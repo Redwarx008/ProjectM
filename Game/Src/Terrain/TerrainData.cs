@@ -19,11 +19,11 @@ public class TerrainData : IDisposable
     public int GeometricWidth { get; private set; }
     public int GeometricHeight { get; private set; }
 
-    private ShaderMaterial? _material;
+    private Terrain _terrain;
 
     public TerrainData(Terrain terrain)
     {
-        _material = terrain.Material;
+        _terrain = terrain;
     }
 
     /// <summary>
@@ -52,9 +52,8 @@ public class TerrainData : IDisposable
 
     private void LoadTextures(MapDefinition definition)
     {
-        Debug.Assert(_material != null);
         DebugGridTexture = GD.Load<Texture2D>("res://EditorAssets/Textures/Grid_Gray_128x128.png");
-        _material.SetShaderParameter("u_debugGridTexture", DebugGridTexture);
+        _terrain.SetMaterialParameter("u_debugGridTexture", DebugGridTexture);
     }
     private void LoadHeightmap(MapDefinition definition, out int width, out int height, out byte[]? data)
     {
@@ -97,8 +96,8 @@ public class TerrainData : IDisposable
         };
         Heightmap = GDTexture2D.Create(heightmapFormat, data);
 
-        _material?.SetShaderParameter("u_heightmap", Heightmap.ToTexture2d());
-        _material?.SetShaderParameter("u_heightmapSize",
+        _terrain.SetMaterialParameter("u_heightmap", Heightmap.ToTexture2d());
+        _terrain.SetMaterialParameter("u_heightmapSize",
             new Vector2I((int)Heightmap.Width, (int)Heightmap.Height));
     }
 
