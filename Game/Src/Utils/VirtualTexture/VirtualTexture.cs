@@ -152,7 +152,7 @@ public class VirtualTexture : IDisposable
                         // 2. 满了 -> LRU 淘汰
                         if (!_pageCache.EvictOne(out var evictedId, out int evictedSlot))
                             continue;
-                        _pageTable.UnmapPage(evictedId);
+                        _pageTable.RemapPage(evictedId);
                         //_physicalTexture.FreeDynamic(evictedSlot); 
                         targetSlot = evictedSlot;
                     }

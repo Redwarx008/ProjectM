@@ -1,12 +1,78 @@
-﻿
+
 using Godot;
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics.X86;
 using SVec3 = System.Numerics.Vector3;
 
 public static class MathExtension
 {
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint EncodeMorton(int x, int y)
+    {
+        return InterleaveBits((uint)x) | (InterleaveBits((uint)y) << 1);
+    }
+
+    private static uint InterleaveBits(uint v)
+    {
+        v = (v | (v << 8)) & 0x00FF00FF;
+        v = (v | (v << 4)) & 0x0F0F0F0F;
+        v = (v | (v << 2)) & 0x33333333;
+        v = (v | (v << 1)) & 0x55555555;
+        return v;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static (int x, int y) DecodeMorton(uint m)
+    {
+        // 偶数位合并为 x，奇数位合并为 y
+        return (
+            (int)DeinterleaveBits(m),      // 提取 0, 2, 4, 6... 位
+            (int)DeinterleaveBits(m >> 1)  // 提取 1, 3, 5, 7... 位
+        );
+    }
+
+    /// <summary>
+    /// 位分离：将原本分散在 0, 2, 4... 位置的位挤压回连续的 0, 1, 2... 位置
+    /// </summary>
+    private static uint DeinterleaveBits(uint x)
+    {
+        // 初始掩码：0101 0101 0101 0101 0101 0101 0101 0101 (0x55555555)
+        x &= 0x55555555;
+
+        // 逐步通过位移和掩码将位“向左对齐”挤压
+        // x = ---- ---- ---- ---- abcd efgh ijkl mnop (原始位分布在 0, 2, 4...)
+        x = (x | (x >> 1)) & 0x33333333; // 每 2 位一组，取第 0 位并靠拢
+        x = (x | (x >> 2)) & 0x0F0F0F0F; // 每 4 位一组，取前 2 位并靠拢
+        x = (x | (x >> 4)) & 0x00FF00FF; // 每 8 位一组...
+        x = (x | (x >> 8)) & 0x0000FFFF; // 每 16 位一组...
+
+        return x;
+    }
+
+    public static int GetNextPowerOfTwo(int x)
+    {
+        if (x < 1)
+        {
+            return 1;  // 如果输入小于1，返回1
+        }
+
+        // 如果已经是2的幂，直接返回
+        if ((x & (x - 1)) == 0)
+        {
+            return x;
+        }
+
+        // 向上找到最接近的2的幂
+        int powerOfTwo = 1;
+        while (powerOfTwo < x)
+        {
+            powerOfTwo <<= 1;
+        }
+        return powerOfTwo;
+    }
+
     public static Vector4 ToVector4(this Plane plane)
     {
         // godot的frustum plane 法线指向视锥体外, 在这里反转法线向量
