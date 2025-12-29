@@ -61,6 +61,8 @@ public class VirtualTexture : IDisposable
 
     private readonly List<VirtualPageID> _pendingRequests = [];
 
+    private Queue<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedPendingPages = [];
+
     public VirtualTexture(uint maxPageCount, VirtualTextureDesc[] vtDescs)
     {
         Debug.Assert(maxPageCount <= 2048);
@@ -86,8 +88,9 @@ public class VirtualTexture : IDisposable
     {
         FlushPageRequests();
         ProcessLoadedPages();
-        _pageTable.Update();
+        _pageTable.UpdateReMap();
         _physicalTexture.Update();
+        _pageTable.UpdateMap();
     }
 
     public void RequestPage(VirtualPageID id)
@@ -126,14 +129,23 @@ public class VirtualTexture : IDisposable
     private void ProcessLoadedPages()
     {
         int persistentMip = MipCount - 1;
-        int processLimit = 10;
-        while (processLimit-- > 0 && _streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result))
+        int processLimit = 15;
+        while (_streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result))
+        {
+            _loadedPendingPages.Enqueue(result);
+        }
+
+
+        int queueCount = _loadedPendingPages.Count;
+        while (processLimit > 0 && queueCount > 0)
         {
             int targetSlot;
+            var result = _loadedPendingPages.Dequeue();
+            --queueCount;
             if (result.id.mip == persistentMip)
             {
                 _pageCache.TryGetPhysicalSlot(result.id, out targetSlot);
-
+                CommitUpdate(result, targetSlot);
                 _loadedPersistentCount++;
                 if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
                 {
@@ -144,29 +156,50 @@ public class VirtualTexture : IDisposable
             else
             {
                 if (!_persistentReady)
-                    continue;
-                if (!_pageCache.TryGetPhysicalSlot(result.id, out targetSlot))
                 {
-                    if (!_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
-                    {
-                        // 2. 满了 -> LRU 淘汰
-                        if (!_pageCache.EvictOne(out var evictedId, out int evictedSlot))
-                            continue;
-                        _pageTable.RemapPage(evictedId);
-                        //_physicalTexture.FreeDynamic(evictedSlot); 
-                        targetSlot = evictedSlot;
-                    }
+                    _loadedPendingPages.Enqueue(result);
+                    continue;
                 }
 
-                if(targetSlot != -1)
+                if (_pageCache.TryGetPhysicalSlot(result.id, out targetSlot))
+                {
+                    CommitUpdate(result, targetSlot);
+                    --processLimit;
+                    continue;
+                }
+
+                if(_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
                 {
                     _pageCache.Add(result.id, targetSlot);
+                    CommitUpdate(result, targetSlot);
+                    --processLimit;
+                }
+                else
+                {
+                    if (_pageCache.EvictOne(out var evictedId, out int evictedSlot))
+                    {
+                        _pageTable.RemapPage(evictedId);
+
+                        _physicalTexture.FreeSlot(evictedSlot);
+                        _loadedPendingPages.Enqueue(result);
+                    }
+                    else
+                    {
+                        _loadedPendingPages.Enqueue(result);
+                    }
                 }
             }
-            _pageCache.MarkLoadComplete(result.id);
-            _physicalTexture.AddUpdate(result.textureId, targetSlot, result.data);
-            _pageTable.MapPage(result.id, targetSlot);
+
         }
+    }
+
+    private void CommitUpdate((int textureId, VirtualPageID id, IMemoryOwner<byte> data) page, int slot)
+    {
+        _pageCache.MarkLoadComplete(page.id);
+        // 1. 提交数据更新 (RD.TextureUpdate)
+        _physicalTexture.AddUpdate(page.textureId, slot, page.data);
+        // 2. 更新页表映射
+        _pageTable.MapPage(page.id, slot);
     }
 
     private void LoadResidentPages()

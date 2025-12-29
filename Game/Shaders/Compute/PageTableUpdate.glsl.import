@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dm6maljfh0yee"
+path="res://.godot/imported/PageTableUpdate.glsl-6d3fe095b4efdebeb44673cb92f782cd.res"
+
+[deps]
+
+source_file="res://Shaders/Compute/PageTableUpdate.glsl"
+dest_files=["res://.godot/imported/PageTableUpdate.glsl-6d3fe095b4efdebeb44673cb92f782cd.res"]
+
+[params]
+
