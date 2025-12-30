@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.ConstrainedExecution;
 using static Godot.HttpRequest;
+using static Godot.RenderingDevice;
 using Logger = Core.Logger;
 
 namespace ProjectM;
@@ -46,6 +47,7 @@ public class VirtualTexture : IDisposable
     public int Padding { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
+    public bool Limit { get; set; }
     public bool Inited { get; private set; }
 
     public static readonly int MaxPageTableMipInGpu = 8;
@@ -87,7 +89,7 @@ public class VirtualTexture : IDisposable
     public void Update()
     {
         FlushPageRequests();
-        ProcessLoadedPages();
+        ProcessLoadedPages(Limit);
         _pageTable.UpdateReMap();
         _physicalTexture.Update();
         _pageTable.UpdateMap();
@@ -126,10 +128,10 @@ public class VirtualTexture : IDisposable
         _pendingRequests.Clear();
     }
 
-    private void ProcessLoadedPages()
+    private void ProcessLoadedPages(bool limit = false)
     {
         int persistentMip = MipCount - 1;
-        int processLimit = 15;
+        int processLimit = limit ? 25 : Int32.MaxValue;
         while (_streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result))
         {
             _loadedPendingPages.Enqueue(result);

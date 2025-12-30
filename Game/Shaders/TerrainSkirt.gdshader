@@ -161,10 +161,10 @@ void vertex()
 void fragment()
 {
 	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
-	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, 0);
+	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, v_RequestHeightMip);
 	worldNormal = normalize(worldNormal);
 	//NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
-	vec3 virtualTextureUV = GetVirtualTextureUV(UV, 0);
+	vec3 virtualTextureUV = GetVirtualTextureUV(UV, v_RequestHeightMip);
 	ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
 	//ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
 	//ALBEDO *= v_debugColor.rgb;
