@@ -2,6 +2,8 @@ using Core;
 using Godot;
 using ProjectM;
 using System;
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -32,7 +34,7 @@ internal class TerrainProcessor : IDisposable
     private int _leafNodeY;
     private int _lodCount;
 
-    private readonly Callable _cachedDispatchCallback;
+    private readonly Callable _dispatchCallable;
 
     private Terrain? _terrain;
 
@@ -44,22 +46,17 @@ internal class TerrainProcessor : IDisposable
 
     private VirtualTexture? _geometricVT; // height or normal
 
-    private NodeSelectedInfo[] _nodeSelectedInfos => _backSelected;
+    private volatile NodeSelectedInfo[] _currentSelectedNodes;
 
-    private NodeSelectedInfo[] _frontSelected = new NodeSelectedInfo[Constants.MaxNodeInSelect];
-    private NodeSelectedInfo[] _backSelected = new NodeSelectedInfo[Constants.MaxNodeInSelect];
+    private ArrayPool<NodeSelectedInfo> _arrayPool;
 
-    // 保护交换操作的锁（仅在主线程使用，但仍保守使用）
-    private readonly object _bufferLock = new();
-
-    // 渲染线程将在 callback 中读取这两个引用（volatile 保证引用的原子读取/写入可见性）
-    private volatile NodeSelectedInfo[]? _dispatchSelected;
-
-    private volatile int _dispatchSelectedCount;
+    private ConcurrentQueue<(NodeSelectedInfo[] seletedNodes, int count)> _dispatchQueue;
 
     public float TolerableError { get; set; }
 
     public bool Inited { get; private set; } = false;
+
+    public static readonly int MaxNodeInSelect = 200;
 
     #region Data struct Definition
 
@@ -87,16 +84,10 @@ internal class TerrainProcessor : IDisposable
         _skirtMesh = skirtMesh;
         _geometricVT = terrain.GeometricVT;
         TolerableError = definition.TerrainTolerableError;
-        _cachedDispatchCallback = Callable.From(() =>
-        {
-            // 渲染线程执行：读取 stable front
-            var sel = _dispatchSelected;
-            var selN = _dispatchSelectedCount;
-
-            // **永远只读，不写，不改数组内容**
-            if (sel != null)
-                Dispatch(sel, selN);
-        });
+        _arrayPool = ArrayPool<NodeSelectedInfo>.Create(MaxNodeInSelect, 2);
+        _dispatchQueue = new ConcurrentQueue<(NodeSelectedInfo[] seletedNodes, int count)>();
+        _currentSelectedNodes = _arrayPool.Rent(MaxNodeInSelect);
+        _dispatchCallable = Callable.From(DispatchBatches);
         CalcLodParameters(terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, (int)terrain.LeafNodeSize);
         CreateQuadTree(terrain, definition);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
@@ -112,7 +103,7 @@ internal class TerrainProcessor : IDisposable
         ReadOnlySpan<Plane> planes = camera.GetFrustum().ToArray();
         var selectDesc = new TerrainQuadTree.SelectDesc
         {
-            nodeSelectedInfos = _nodeSelectedInfos,
+            nodeSelectedInfos = _currentSelectedNodes,
             planes = planes,
             viewerPos = camera.GlobalPosition,
             tolerableError = TolerableError,
@@ -123,23 +114,35 @@ internal class TerrainProcessor : IDisposable
         SubmitForRender(selectDesc.nodeSelectedCount);
     }
 
-    // 交换并提交给渲染线程（仅在主线程调用）
     private void SubmitForRender(int selectedCount)
     {
-        // 锁住交换 —— 确保可见性与原子性
-        lock (_bufferLock)
-        {
-            // 交换 Selected
-            (_frontSelected, _backSelected) = (_backSelected, _frontSelected);
+        if (selectedCount <= 0) return;
 
-            // 设置渲染线程可读的稳定 front 引用（volatile 写）
-            _dispatchSelected = _frontSelected;
-            _dispatchSelectedCount = selectedCount;
-        }
+        _dispatchQueue.Enqueue((_currentSelectedNodes, selectedCount));
 
-        RenderingServer.CallOnRenderThread(_cachedDispatchCallback);
+        _currentSelectedNodes = _arrayPool.Rent(MaxNodeInSelect);
+
+        RenderingServer.CallOnRenderThread(_dispatchCallable);
     }
-    private void Dispatch(
+
+    private void DispatchBatches()
+    {
+        while (_dispatchQueue.TryDequeue(out var task))
+        {
+            NodeSelectedInfo[] array = task.seletedNodes;
+            int count = task.count;
+
+            try
+            {
+                DispatchOneBatch(array, count);
+            }
+            finally
+            {
+                _arrayPool.Return(array, clearArray: false);
+            }
+        }
+    }
+    private void DispatchOneBatch(
         NodeSelectedInfo[] selected, int selectedCount)
     {
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
