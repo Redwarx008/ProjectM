@@ -46,7 +46,7 @@ internal class TerrainProcessor : IDisposable
 
     private VirtualTexture? _geometricVT; // height or normal
 
-    private volatile NodeSelectedInfo[] _currentSelectedNodes;
+    private NodeSelectedInfo[] _currentSelectedNodes;
 
     private ArrayPool<NodeSelectedInfo> _arrayPool;
 
