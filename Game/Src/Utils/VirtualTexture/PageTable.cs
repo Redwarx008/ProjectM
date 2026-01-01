@@ -55,7 +55,7 @@ internal unsafe class PageTable : IDisposable
             }
         }
     }
-
+     
     private class PageUpdateInfoComparer : IComparer<PageUpdateInfo>
     {
         public int Compare(PageUpdateInfo a, PageUpdateInfo b)
@@ -315,7 +315,7 @@ internal unsafe class PageTable : IDisposable
         }
     }
 
-    private void SubmitBatch(SortedSet<PageUpdateInfo>[] activeSets)
+    private void SubmitBatch(ref SortedSet<PageUpdateInfo>[] activeSets)
     {
         bool hasData = false;
         foreach (var set in activeSets)
@@ -332,9 +332,9 @@ internal unsafe class PageTable : IDisposable
         }));
     }
 
-    public void UpdateMap() => SubmitBatch(_activeMapSets);
+    public void UpdateMap() => SubmitBatch(ref _activeMapSets);
 
-    public void UpdateReMap() => SubmitBatch(_activeRemapSets);
+    public void UpdateReMap() => SubmitBatch(ref _activeRemapSets);
 
     private void Dispatch(SortedSet<PageUpdateInfo>[] pageUpdateSetPerMip, SortedSetArrayPool pool)
     {
@@ -356,11 +356,11 @@ internal unsafe class PageTable : IDisposable
                   info.y * scale
                 );
 
-                var bounds = _mipRealBounds[coveredMip];
+                var (w, h) = _mipRealBounds[coveredMip];
 
                 var size = new Vector2I(
-                  Math.Min(scale, bounds.w - origin.X),
-                  Math.Min(scale, bounds.h - origin.Y)
+                  Math.Min(scale, w - origin.X),
+                  Math.Min(scale, h - origin.Y)
                 );
 
                 if (size.X <= 0 || size.Y <= 0)
@@ -382,12 +382,13 @@ internal unsafe class PageTable : IDisposable
                     MemoryMarshal.CreateReadOnlySpan<ShaderPushConstants>(ref pushConstants, 1));
 
                 rd.ComputeListSetPushConstant(list, bytes, (uint)bytes.Length);
-                rd.ComputeListDispatch(list, (uint)Math.Ceiling(bounds.w / 1f), (uint)Math.Ceiling(bounds.h / 1f), 1);
+                rd.ComputeListDispatch(list, (uint)Math.Ceiling(size.X / 8f), (uint)Math.Ceiling(size.Y / 8f), 1);
                 rd.ComputeListAddBarrier(list);
             }
             pageUpdateInfos.Clear();
         }
-        rd.ComputeListEnd(); 
+        rd.ComputeListEnd();
+        pool.Return(pageUpdateSetPerMip);
     }
 
     private void BuildPipeline()
