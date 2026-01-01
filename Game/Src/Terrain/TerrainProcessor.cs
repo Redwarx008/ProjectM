@@ -122,7 +122,7 @@ internal class TerrainProcessor : IDisposable
 
         _currentSelectedNodes = _arrayPool.Rent(MaxNodeInSelect);
 
-        RenderingServer.CallOnRenderThread(_dispatchCallable);
+        RenderingServer.CallOnRenderThread(_dispatchCallable); //todo: 直接提交DispatchOneBatch当Callable.Bind可用时，当前这样做是为了避免每帧创建闭包
     }
 
     private void DispatchBatches()
