@@ -4,10 +4,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing;
 using System.Runtime.ConstrainedExecution;
-using static Godot.HttpRequest;
-using static Godot.RenderingDevice;
 using Logger = Core.Logger;
 
 namespace ProjectM;
@@ -23,6 +20,10 @@ public struct VirtualPageID : System.IEquatable<VirtualPageID>, IComparable<Virt
     public override int GetHashCode() => HashCode.Combine(mip, x, y);
     public static bool operator ==(VirtualPageID a, VirtualPageID b) => a.Equals(b);
     public static bool operator !=(VirtualPageID a, VirtualPageID b) => !a.Equals(b);
+    public override string ToString()
+    {
+        return $"mip: {mip}, x: {x}, y: {y}";
+    }
 }
 
 public struct VirtualTextureDesc
@@ -47,7 +48,7 @@ public class VirtualTexture : IDisposable
     public int Padding { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
-    public bool Limit { get; set; }
+    public int ProcessLimit { get; set; } = 999;
     public bool Inited { get; private set; }
 
     public static readonly int MaxPageTableMipInGpu = 8;
@@ -63,7 +64,7 @@ public class VirtualTexture : IDisposable
 
     private readonly List<VirtualPageID> _pendingRequests = [];
 
-    private Queue<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedPendingPages = [];
+    private List<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedPendingPages = [];
 
     public VirtualTexture(uint maxPageCount, VirtualTextureDesc[] vtDescs)
     {
@@ -89,7 +90,7 @@ public class VirtualTexture : IDisposable
     public void Update()
     {
         FlushPageRequests();
-        ProcessLoadedPages(Limit);
+        ProcessLoadedPages();
         _pageTable.UpdateReMap();
         _physicalTexture.Update();
         _pageTable.UpdateMap();
@@ -128,26 +129,23 @@ public class VirtualTexture : IDisposable
         _pendingRequests.Clear();
     }
 
-    private void ProcessLoadedPages(bool limit = false)
+    private void ProcessLoadedPages()
     {
         int persistentMip = MipCount - 1;
-        int processLimit = limit ? 25 : Int32.MaxValue;
         while (_streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result))
         {
-            _loadedPendingPages.Enqueue(result);
+            _loadedPendingPages.Add(result);
         }
 
-
-        int queueCount = _loadedPendingPages.Count;
-        while (processLimit > 0 && queueCount > 0)
+        int processCount = Math.Min(_loadedPendingPages.Count, ProcessLimit);
+        for (int i = 0; i < processCount; ++i)
         {
             int targetSlot;
-            var result = _loadedPendingPages.Dequeue();
-            --queueCount;
-            if (result.id.mip == persistentMip)
+            var loadedPage = _loadedPendingPages[i];
+            if (loadedPage.id.mip == persistentMip)
             {
-                _pageCache.TryGetPhysicalSlot(result.id, out targetSlot);
-                CommitUpdate(result, targetSlot);
+                _pageCache.TryGetPhysicalSlot(loadedPage.id, out targetSlot);
+                CommitUpdate(loadedPage, targetSlot);
                 _loadedPersistentCount++;
                 if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
                 {
@@ -159,40 +157,32 @@ public class VirtualTexture : IDisposable
             {
                 if (!_persistentReady)
                 {
-                    _loadedPendingPages.Enqueue(result);
+                    DiscardPage(loadedPage);
                     continue;
                 }
 
-                if (_pageCache.TryGetPhysicalSlot(result.id, out targetSlot))
+                if (_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
                 {
-                    CommitUpdate(result, targetSlot);
-                    --processLimit;
-                    continue;
-                }
-
-                if(_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
-                {
-                    _pageCache.Add(result.id, targetSlot);
-                    CommitUpdate(result, targetSlot);
-                    --processLimit;
+                    _pageCache.Add(loadedPage.id, targetSlot);
+                    CommitUpdate(loadedPage, targetSlot);
                 }
                 else
                 {
-                    if (_pageCache.EvictOne(out var evictedId, out int evictedSlot))
-                    {
-                        _pageTable.RemapPage(evictedId);
+                    _pageCache.EvictOne(out var evictedId, out int evictedSlot);
+                    _pageTable.RemapPage(evictedId);
 
-                        _physicalTexture.FreeSlot(evictedSlot);
-                        _loadedPendingPages.Enqueue(result);
-                    }
-                    else
-                    {
-                        _loadedPendingPages.Enqueue(result);
-                    }
+                    _pageCache.Add(loadedPage.id, evictedSlot);
+                    CommitUpdate(loadedPage, evictedSlot);
                 }
             }
-
         }
+
+        for(int i = processCount; i < _loadedPendingPages.Count; ++i)
+        {
+            DiscardPage(_loadedPendingPages[i]);
+        }
+
+        _loadedPendingPages.Clear();
     }
 
     private void CommitUpdate((int textureId, VirtualPageID id, IMemoryOwner<byte> data) page, int slot)
@@ -202,6 +192,15 @@ public class VirtualTexture : IDisposable
         _physicalTexture.AddUpdate(page.textureId, slot, page.data);
         // 2. 更新页表映射
         _pageTable.MapPage(page.id, slot);
+    }
+
+    private void DiscardPage((int textureId, VirtualPageID id, IMemoryOwner<byte> data) page)
+    {
+        page.data.Dispose();
+        // 通知 Cache 该页面“处理结束”（尽管是失败的）
+        // 这样 PageCache 会从 _loadingPages 移除它。
+        // 如果下一帧相机还在那里，RequestPage 会再次发现它不在 Cache 里，从而重新请求。
+        _pageCache.MarkLoadComplete(page.id);
     }
 
     private void LoadResidentPages()
@@ -237,6 +236,11 @@ public class VirtualTexture : IDisposable
 
     public void Dispose()
     {
+        foreach(var loadedPage in _loadedPendingPages)
+        {
+            loadedPage.data.Dispose();
+        }
+        _loadedPendingPages.Clear();
         _pageTable.Dispose();
         _physicalTexture.Dispose();
     }
