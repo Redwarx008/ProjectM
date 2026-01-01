@@ -3,40 +3,66 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace ProjectM;
 
-internal sealed class PageBufferOwner : IMemoryOwner<byte>
+internal sealed unsafe class NativePageBufferOwner : MemoryManager<byte>
 {
     private PageBufferAllocator? _allocator;
-    private byte[]? _buffer;
+    private byte* _ptr;
+    private readonly int _length;
 
-    public PageBufferOwner(PageBufferAllocator allocator, byte[] buffer)
+    public NativePageBufferOwner(PageBufferAllocator allocator, byte* ptr, int length)
     {
         _allocator = allocator;
-        _buffer = buffer;
+        _ptr = ptr;
+        _length = length;
     }
 
-    public Memory<byte> Memory => _buffer!; 
-
-    public void Dispose()
+    public override Span<byte> GetSpan()
     {
-        if (_buffer != null)
+        if (_ptr == null)
+            throw new ObjectDisposedException(nameof(NativePageBufferOwner));
+
+        return new Span<byte>(_ptr, _length);
+    }
+
+    public override MemoryHandle Pin(int elementIndex = 0)
+    {
+        if ((uint)elementIndex > (uint)_length)
+            throw new ArgumentOutOfRangeException(nameof(elementIndex));
+
+        return new MemoryHandle(_ptr + elementIndex);
+    }
+
+    public override void Unpin()
+    {
+        // no-op (unmanaged memory)
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (_ptr != null)
         {
-            _allocator!.Return(_buffer);
-            _buffer = null;
+            _allocator!.Return(_ptr);
+            _ptr = null;
             _allocator = null;
         }
     }
 }
-internal sealed class PageBufferAllocator : IDisposable
+
+
+internal sealed unsafe class PageBufferAllocator : IDisposable
 {
     private readonly int _bytesPerPage;
-    private readonly ConcurrentBag<byte[]> _pool = [];
     private readonly int _maxCount;
+
+    private readonly ConcurrentBag<nint> _pool = new();
     private int _allocated;
 
     public PageBufferAllocator(int bytesPerPage, int maxCount)
@@ -47,27 +73,31 @@ internal sealed class PageBufferAllocator : IDisposable
 
     public IMemoryOwner<byte> Rent()
     {
-        if (_pool.TryTake(out var buffer))
+        if (_pool.TryTake(out var p))
         {
-            return new PageBufferOwner(this, buffer);
+            return new NativePageBufferOwner(this, (byte*)p, _bytesPerPage);
         }
 
         if (Interlocked.Increment(ref _allocated) <= _maxCount)
         {
-            return new PageBufferOwner(this, new byte[_bytesPerPage]);
+            nint mem = (nint)NativeMemory.Alloc((nuint)_bytesPerPage);
+            return new NativePageBufferOwner(this, (byte*)mem, _bytesPerPage);
         }
 
         Interlocked.Decrement(ref _allocated);
-        throw new OutOfMemoryException("[VT] Page buffer pool exhausted.");
+        throw new OutOfMemoryException();
     }
 
-    internal void Return(byte[] buffer)
+    internal void Return(byte* ptr)
     {
-        _pool.Add(buffer);
+        _pool.Add((nint)ptr);
     }
 
     public void Dispose()
     {
-        _pool.Clear();
+        while (_pool.TryTake(out var p))
+        {
+            NativeMemory.Free((void*)p);
+        }
     }
 }
