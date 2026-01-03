@@ -52,10 +52,12 @@ public partial class Terrain : Node3D
 
     public override void _Ready()
     {
+#if !EXPORTRELEASE
         if (Engine.IsEditorHint())
         {
             _activeCamera = EditorInterface.Singleton.GetEditorViewport3D(0).GetCamera3D();
         }
+#endif
         _activeCamera ??= GetViewport().GetCamera3D();
         ViewPortWidth = ActiveCamera!.GetViewport().GetVisibleRect().Size.X;
         _planeMaterial = new ShaderMaterial()

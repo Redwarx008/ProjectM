@@ -73,6 +73,21 @@ internal class PageCache
 
     public bool EvictOne(out VirtualPageID evictedId, out int evictedSlot)
     {
-        return _dynamicResidentPages.TryPopOldest(out evictedId, out evictedSlot);
+       if(!_dynamicResidentPages.TryPopOldest(out evictedId, out evictedSlot))
+       {
+            evictedSlot = -1;
+            return false;
+       }
+        return true;
+    }
+
+    public bool Remove(VirtualPageID id, out int slot)
+    {
+        if(!_dynamicResidentPages.Remove(id, out slot))
+        {
+            slot = -1;
+            return false;
+        }
+        return true;
     }
 }

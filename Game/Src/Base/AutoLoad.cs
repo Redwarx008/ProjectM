@@ -52,10 +52,11 @@ internal partial class AutoLoad : Node
         {
             GD.PushError(string.Format($"[Error] {message}", args));
         };
-
+#if DEBUG
         Logger.LogDebugFunc = (string message, params object[] args) =>
         {
             GD.Print(string.Format($"[Debug] {message}", args));
         };
+#endif
     }
 }

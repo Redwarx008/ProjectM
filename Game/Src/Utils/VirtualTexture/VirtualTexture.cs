@@ -48,7 +48,7 @@ public class VirtualTexture : IDisposable
     public int Padding { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
-    public int ProcessLimit { get; set; } = 999;
+    public int ProcessLimit { get; set; } = 15;
     public bool Inited { get; private set; }
 
     public static readonly int MaxPageTableMipInGpu = 8;
@@ -65,6 +65,8 @@ public class VirtualTexture : IDisposable
     private readonly List<VirtualPageID> _pendingRequests = [];
 
     private List<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedPendingPages = [];
+
+    private Action<VirtualPageID> _onRemovePage;
 
     public VirtualTexture(uint maxPageCount, VirtualTextureDesc[] vtDescs)
     {
@@ -84,6 +86,12 @@ public class VirtualTexture : IDisposable
         _pageTable = new PageTable(Width, Height, TileSize, (int)maxPageCount, MipCount);
         _pageCache = new PageCache(_pageTable, MipCount, (int)(maxPageCount - _pageTable.DynamicPageOffset));
         _physicalTexture = new PhysicalTexture(maxPageCount, _pageTable.DynamicPageOffset, vTInfo, vtDescs);
+        _onRemovePage = id =>
+        {
+            _pageCache.Remove(id, out int evictedSlot);
+            Debug.Assert(evictedSlot != -1);
+            _physicalTexture.FreeSlot(evictedSlot);
+        };
         LoadResidentPages();
     }
 
@@ -169,8 +177,9 @@ public class VirtualTexture : IDisposable
                 else
                 {
                     _pageCache.EvictOne(out var evictedId, out int evictedSlot);
-                    _pageTable.RemapPage(evictedId);
-
+                    //Logger.Debug($"[VT] Evict Page: {evictedId} {evictedSlot}");
+                    _pageTable.RemapPage(evictedId, _onRemovePage);
+                    Debug.Assert(evictedSlot != -1);
                     _pageCache.Add(loadedPage.id, evictedSlot);
                     CommitUpdate(loadedPage, evictedSlot);
                 }

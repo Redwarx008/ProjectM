@@ -1,3 +1,4 @@
+using Core;
 using Godot;
 using System;
 using System.Buffers;
@@ -11,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using static ProjectM.VirtualTexture;
+using Logger = Core.Logger;
 
 namespace ProjectM;
 
@@ -210,108 +212,212 @@ internal unsafe class PageTable : IDisposable
         }));
         InitializeCpuTable();
     }
-
     public void MapPage(VirtualPageID id, int physicalSlot)
     {
         Debug.Assert(IsValid(id.mip, id.x, id.y));
         // 设置当前页面的状态
-        uint idx = MathExtension.EncodeMorton(id.x, id.y);
+        uint rootMorton = MathExtension.EncodeMorton(id.x, id.y);
 
-        PageEntry* pageEntry = _mipBasePages[id.mip] + idx;
+        PageEntry* pageEntry = _mipBasePages[id.mip] + rootMorton;
         pageEntry->mappingSlot = (short)physicalSlot;
         pageEntry->activeMip = (ushort)id.mip;
 
         AddUpdateMap(id.x, id.y, id.mip, id.mip, *pageEntry);
 
-        int mipOffset = 0;
-        int range = 1;
+        //int mipOffset = 0;
+        //int range = 1;
+        //for (int mip = id.mip - 1; mip >= 0; --mip)
+        //{
+        //    mipOffset += 1;
+        //    range *= 4;
+        //    int subPageIdxBegin = (int)idx << (mipOffset * 2);
+        //    for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
+        //    {
+        //        (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
+        //        if (!IsValid(mip, coord.x, coord.y))
+        //        {
+        //            continue;
+        //        }
+
+        //        PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
+        //        if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
+        //        {
+        //            for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
+        //            {
+        //                AddUpdateMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
+        //            }
+        //        }
+        //    }
+
+        //    AddUpdateMap(id.x, id.y, id.mip, mip, *pageEntry);
+        //}
+
         for (int mip = id.mip - 1; mip >= 0; --mip)
         {
-            mipOffset += 1;
-            range *= 4;
-            int subPageIdxBegin = (int)idx << (mipOffset * 2);
-            for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
-            {
-                (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
-                if (!IsValid(mip, coord.x, coord.y))
-                {
-                    continue;
-                }
+            AddUpdateMap(id.x, id.y, id.mip, mip, *pageEntry);
+        }
 
-                PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
-                if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
-                {
-                    for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
-                    {
-                        AddUpdateMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
-                    }
+        Span<MortonDFSNode> stack = stackalloc MortonDFSNode[64];
+        int top = 0;
+        stack[top++] = new MortonDFSNode
+        {
+            mip = id.mip - 1,
+            morton = rootMorton << 2
+        };
+        while (top > 0)
+        {
+            MortonDFSNode node = stack[--top];
+
+            if (node.mip < 0)
+                continue;
+
+            PageEntry* entry =
+                _mipBasePages[node.mip] + node.morton;
+
+            if (entry->mappingSlot == -1 ||
+                    entry->activeMip != node.mip)
+            {
+                continue;
+            }
+            (int x, int y) = MathExtension.DecodeMorton((uint)node.morton);
+
+            if(!IsValid(node.mip, x, y))
+            {
+                continue;
+            }
+
+            if(entry->activeMip == node.mip && entry->mappingSlot != -1)
+            {
+                for (int subPageMip = node.mip; subPageMip >= 0; --subPageMip)
+                {
+                    AddUpdateMap(x, y, node.mip, subPageMip, *entry);
                 }
             }
 
-            AddUpdateMap(id.x, id.y, id.mip, mip, *pageEntry);
+            for (uint childBits = 0; childBits < 4; ++childBits)
+            {
+                stack[top++] = new MortonDFSNode
+                {
+                    mip = node.mip - 1,
+                    morton = (node.morton << 2) | childBits
+                };
+            }
         }
+        //Logger.Debug($"[VT]: map page : {id} {physicalSlot}");
     }
 
-    public void RemapPage(VirtualPageID id)
+    private struct MortonDFSNode
+    {
+        public int mip;
+        public uint morton;
+    }
+    public void RemapPage(VirtualPageID id, Action<VirtualPageID> removePageMethod)
     {
         Debug.Assert(IsValid(id.mip, id.x, id.y));
         int fallbackSlot = -1;
         int fallbackMip = -1;
-        //// 向上寻找最近有效的祖先作为新的 Fallback 来源
-        //for (int m = id.mip + 1; m <= _persistentMip; m++)
-        //{
-        //    VirtualPageID ancestor = MapToAncestor(id, m);
-        //    uint idxInMip = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
-        //    PageEntry* entry = _mipBasePages[m] + idxInMip;
-        //    if (entry->activeMip == m && entry->mappingSlot != -1)
-        //    {
-        //        fallbackSlot = entry->mappingSlot;
-        //        fallbackMip = entry->activeMip;
-        //        break;
-        //    }
-        //}
+
         VirtualPageID ancestor = MapToAncestor(id, _persistentMip);
-        uint idxInMip = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
-        PageEntry* entry = _mipBasePages[_persistentMip] + idxInMip;
-        Debug.Assert(entry->mappingSlot != -1 && entry->activeMip == _persistentMip);
-        fallbackSlot = entry->mappingSlot;
-        fallbackMip = entry->activeMip;
+        uint persistentMorton = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
+        PageEntry* fallbackEntry = _mipBasePages[_persistentMip] + persistentMorton;
+        Debug.Assert(fallbackEntry->mappingSlot != -1 && fallbackEntry->activeMip == _persistentMip);
+        fallbackSlot = fallbackEntry->mappingSlot;
+        fallbackMip = fallbackEntry->activeMip;
 
+        uint rootMorton = MathExtension.EncodeMorton(id.x, id.y);
 
-        uint idx = MathExtension.EncodeMorton(id.x, id.y);
-
-        PageEntry* pageEntry = _mipBasePages[id.mip] + idx;
+        PageEntry* pageEntry = _mipBasePages[id.mip] + rootMorton;
         pageEntry->mappingSlot = (short)fallbackSlot;
         pageEntry->activeMip = (ushort)fallbackMip;
 
         AddUpdateReMap(id.x, id.y, id.mip, id.mip, *pageEntry);
 
-        int mipOffset = 0;
-        int range = 1;
+        //int mipOffset = 0;
+        //int range = 1;
+        //for (int mip = id.mip - 1; mip >= 0; --mip)
+        //{
+        //    mipOffset += 1;
+        //    range *= 4;
+        //    int subPageIdxBegin = (int)rootMorton << (mipOffset * 2);
+        //    for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
+        //    {
+        //        (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
+        //        if (!IsValid(mip, coord.x, coord.y))
+        //        {
+        //            continue;
+        //        }
+
+        //        PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
+        //        if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
+        //        {
+        //            //for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
+        //            //{
+        //            //    AddUpdateReMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
+        //            //}
+        //            var subPageId = new VirtualPageID()
+        //            {
+        //                x = coord.x,
+        //                y = coord.y,
+        //                mip = mip,
+        //            };
+        //            subPageEntry->mappingSlot = (short)fallbackSlot;
+        //            subPageEntry->activeMip = (ushort)fallbackMip;
+        //            removePageMethod(subPageId);
+        //            Logger.Debug($"[VT]: remove subpage : {subPageId}");
+        //        }
+        //    }
+        //    AddUpdateReMap(id.x, id.y, id.mip, mip, *pageEntry);
+        //}
+
         for (int mip = id.mip - 1; mip >= 0; --mip)
         {
-            mipOffset += 1;
-            range *= 4;
-            int subPageIdxBegin = (int)idx << (mipOffset * 2);
-            for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
-            {
-                (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
-                if (!IsValid(mip, coord.x, coord.y))
-                {
-                    continue;
-                }
-
-                PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
-                if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
-                {
-                    for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
-                    {
-                        AddUpdateReMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
-                    }
-                }
-            }
-
             AddUpdateReMap(id.x, id.y, id.mip, mip, *pageEntry);
+        }
+
+        Span<MortonDFSNode> stack = stackalloc MortonDFSNode[64];
+        int top = 0;
+        stack[top++] = new MortonDFSNode
+        {
+            mip = id.mip - 1,
+            morton = rootMorton << 2
+        };
+        while (top > 0)
+        {
+            MortonDFSNode node = stack[--top];
+
+            if (node.mip < 0)
+                continue;
+
+            PageEntry* entry =
+                _mipBasePages[node.mip] + node.morton;
+
+            if (entry->mappingSlot == -1 ||
+                    entry->activeMip != node.mip)
+            {
+                continue;
+            }
+            (int x, int y) = MathExtension.DecodeMorton((uint)node.morton);
+
+            Debug.Assert(IsValid(node.mip, x, y));
+
+            var entryID = new VirtualPageID()
+            {
+                mip = node.mip,
+                x = x,
+                y = y
+            };
+            entry->mappingSlot = (short)fallbackSlot;
+            entry->activeMip = (ushort)fallbackMip;
+            removePageMethod(entryID);
+
+            for (uint childBits = 0; childBits < 4; ++childBits)
+            {
+                stack[top++] = new MortonDFSNode
+                {
+                    mip = node.mip - 1,
+                    morton = (node.morton << 2) | childBits
+                };
+            }
         }
     }
 

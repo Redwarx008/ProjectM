@@ -152,20 +152,20 @@ void vertex()
 	float lowResHeight = GetOriginHeight(worldSpacePos.xz, lodDirection * (1 << lodLevel), lowResMip);
 	height = mix(lowResHeight, height, morphVal);
 
-	//worldSpacePos.y = height;
-	//float skirtHeihgt = -u_heightScale / 10.0;
-	//worldSpacePos.y += skirtHeihgt * float(VERTEX_ID % 2);
+	worldSpacePos.y = height;
+	float skirtHeihgt = -u_heightScale / 10.0;
+	worldSpacePos.y += skirtHeihgt * float(VERTEX_ID % 2);
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldSpacePos, 1);
 }
 
 void fragment()
 {
 	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
-	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, v_RequestHeightMip);
+	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, 0);
 	worldNormal = normalize(worldNormal);
-	//NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
-	vec3 virtualTextureUV = GetVirtualTextureUV(UV, v_RequestHeightMip);
+	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
+	vec3 virtualTextureUV = GetVirtualTextureUV(UV, 0);
 	ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
-	//ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
+	ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
 	//ALBEDO *= v_debugColor.rgb;
 }

@@ -51,14 +51,16 @@ public class LRUCollection<TKey, TValue> where TKey : notnull
 
     public bool ContainsKey(TKey key) => _map.ContainsKey(key);
 
-    public bool Remove(TKey key)
+    public bool Remove(TKey key, out TValue value)
     {
         if (_map.TryGetValue(key, out var node))
         {
+            value = node.Value.Value;
             _map.Remove(key);
             _list.Remove(node);
             return true;
         }
+        value = default!;
         return false;
     }
 

@@ -1,4 +1,4 @@
-﻿namespace Core;
+namespace Core;
 public static class Logger
 {
     public delegate void MessageCallback(string message, params object[] args);
