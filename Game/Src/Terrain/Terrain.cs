@@ -33,9 +33,12 @@ public partial class Terrain : Node3D
         get => _heightScale;
         set
         {
-            if (_planeMaterial != null && _heightScale != value)
+            if (_heightScale != value)
             {
-                SetMaterialParameter("u_heightScale", value);
+                if (_planeMesh != null)
+                {
+                    SetMaterialParameter("u_heightScale", value);
+                }
                 _heightScale = value;
             }
         }
@@ -62,6 +65,10 @@ public partial class Terrain : Node3D
             if (_planeMesh != null)
             {
                 _planeMesh.Visible = Visible;
+            }
+            if (_skirtMesh != null)
+            {
+                _skirtMesh.Visible = Visible;
             }
         }
     }
@@ -101,6 +108,7 @@ public partial class Terrain : Node3D
     {
         base._ExitTree();
         _planeMesh?.Dispose();
+        _skirtMesh?.Dispose();
         _processor?.Dispose();
         Data.Dispose();
     }

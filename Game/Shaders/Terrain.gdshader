@@ -2,7 +2,6 @@ shader_type spatial;
 render_mode depth_draw_always;
 
 uniform float u_heightScale;
-uniform int u_baseChunkSize;
 
 uniform uvec2 u_heightmapSize;
 
@@ -19,9 +18,6 @@ uniform sampler2DArray u_VTPhysicalHeightmap : repeat_disable;
 
 uniform int u_PagePadding;
 uniform int u_HeightmapLodOffset;
-
-uniform sampler2D u_heightmap : repeat_disable;
-uniform sampler2D u_lodmap;
 
 uniform sampler2DArray u_groundDiffuseArray : source_color;
 uniform sampler2DArray u_groundNormalArray ;
