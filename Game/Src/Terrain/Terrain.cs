@@ -18,17 +18,33 @@ public partial class Terrain : Node3D
 
     public TerrainData Data { get; private set; } = null!;
 
-    public VirtualTexture? GeometricVT { get; private set; } // height or normal
-
     public uint LeafNodeSize { get; set; } = 32;
 
     public static readonly int MaxLodCount = 10;
 
     public static readonly uint MaxVTPageCount = 200;
 
+    [Export]
+    public float TolerableError { get; set; } = 9f;
+
+    [Export]
+    public float HeightScale
+    {
+        get => _heightScale;
+        set
+        {
+            if (_planeMaterial != null && _heightScale != value)
+            {
+                SetMaterialParameter("u_heightScale", value);
+                _heightScale = value;
+            }
+        }
+    }
+
+    private float _heightScale = 100f;
+
     public float ViewPortWidth { get; private set; }
 
-    public int HeightmapLodOffset { get; private set; }
 
     private TerrainMesh? _planeMesh;
 
@@ -70,9 +86,6 @@ public partial class Terrain : Node3D
         };
         Data = new TerrainData(this);
         CreateMesh();
-        InitVirtualTexture();;
-        Debug.Assert(GeometricVT != null);
-        CalcHeightmapLodOffsetToMip(GeometricVT.TileSize, (int)LeafNodeSize);
     }
 
     public override void _Process(double delta)
@@ -89,16 +102,14 @@ public partial class Terrain : Node3D
         base._ExitTree();
         _planeMesh?.Dispose();
         _processor?.Dispose();
-        GeometricVT?.Dispose();
         Data.Dispose();
     }
 
-    public void Init(MapDefinition definition)
+    public void Load()
     {
-        Data.LoadMinMaxErrorMaps();
-        InitMaterialParameters(definition);
-        Data.Load(definition);
-        _processor = new TerrainProcessor(this, _planeMesh, _skirtMesh, definition);
+        Data.Load();
+        InitMaterialParameters();
+        _processor = new TerrainProcessor(this, _planeMesh, _skirtMesh);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -110,53 +121,25 @@ public partial class Terrain : Node3D
         _skirtMaterial.SetShaderParameter(param, value);
     }
 
-    private void InitVirtualTexture()
+    private void InitMaterialParameters()
     {
-        VirtualTextureDesc[] descs =
-        {
-            new VirtualTextureDesc()
-            {
-                format = RenderingDevice.DataFormat.R16Unorm,
-                filePath = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.svt")!
-            }
-        };
-        GeometricVT = new VirtualTexture(Terrain.MaxVTPageCount, descs);
-    }
-
-    private void InitMaterialParameters(MapDefinition definition)
-    {
-        Debug.Assert(GeometricVT != null);
-        SetMaterialParameter("u_heightScale", definition.TerrainHeightScale);
+        Debug.Assert(Data.GeometricVT != null);
+        SetMaterialParameter("u_heightScale", HeightScale);
         SetMaterialParameter("u_baseChunkSize", LeafNodeSize);
-        SetMaterialParameter("u_PagePadding", GeometricVT.Padding);
-        SetMaterialParameter("u_VTPhysicalHeightmap", GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
+        SetMaterialParameter("u_PagePadding", Data.GeometricVT.Padding);
+        SetMaterialParameter("u_VTPhysicalHeightmap", Data.GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
         Texture2Drd[] pageTable = new Texture2Drd[VirtualTexture.MaxPageTableMipInGpu];
-        for (int i = 0; i < GeometricVT.MipCount; ++i)
+        for (int i = 0; i < Data.GeometricVT.MipCount; ++i)
         {
-            pageTable[i] = GeometricVT.GetPageTableInMipLevel(i);
+            pageTable[i] = Data.GeometricVT.GetPageTableInMipLevel(i);
         }
-        for(int i = GeometricVT.MipCount; i < VirtualTexture.MaxPageTableMipInGpu; ++i)
+        for(int i = Data.GeometricVT.MipCount; i < VirtualTexture.MaxPageTableMipInGpu; ++i)
         {
-            pageTable[i] = GeometricVT.GetPageTableInMipLevel(GeometricVT.MipCount - 1);
+            pageTable[i] = Data.GeometricVT.GetPageTableInMipLevel(Data.GeometricVT.MipCount - 1);
         }
         SetMaterialParameter("u_VTPageTable", pageTable);
-        SetMaterialParameter("u_HeightmapLodOffset", HeightmapLodOffset);
-    }
-
-    private void CalcHeightmapLodOffsetToMip(int pageSize, int leafNodeSize)
-    {
-        //int lodOffsetToMip = 0;
-        //while (leafNodeSize < pageSize)
-        //{
-        //    leafNodeSize *= 2;
-        //    ++lodOffsetToMip;
-        //}
-        //return lodOffsetToMip;
-
-        int offset = System.Numerics.BitOperations.Log2((uint)pageSize) -
-                     System.Numerics.BitOperations.Log2((uint)leafNodeSize);
-
-        HeightmapLodOffset = Math.Max(0, offset);
+        SetMaterialParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
+        SetMaterialParameter("u_heightmapSize",new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
     }
 
     private void CreateMesh()

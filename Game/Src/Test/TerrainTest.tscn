@@ -72,3 +72,4 @@ script = ExtResource("2_pvoya")
 [node name="Terrain" type="Node3D" parent="." unique_id=458070647 node_paths=PackedStringArray("_activeCamera")]
 script = ExtResource("1_pvoya")
 _activeCamera = NodePath("../../../../../../../../../@Node3DEditor@10752/@HSplitContainer@10201/@HSplitContainer@10203/@VSplitContainer@10205/@Node3DEditorViewportContainer@10206/@Node3DEditorViewport@10255/@SubViewportContainer@10207/@SubViewport@10208/@Camera3D@10210")
+HeightScale = 200.0

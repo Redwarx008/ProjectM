@@ -8,9 +8,6 @@
 		<OutputPath>$(SolutionDir).godot\mono\temp\bin\$(Configuration)\</OutputPath>-->
 	</PropertyGroup>
 	<ItemGroup>
-		<PackageReference Include="StbImageSharp" Version="2.30.15" />
-	</ItemGroup>
-	<ItemGroup>
 		<Content Include="Shaders\Compute\MinMaxErrorMapCompute.glsl" />
 		<Content Include="Shaders\Compute\TerrainCompute.glsl" />
 	</ItemGroup>

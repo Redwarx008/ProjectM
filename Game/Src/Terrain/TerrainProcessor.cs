@@ -52,8 +52,6 @@ internal class TerrainProcessor : IDisposable
 
     private ConcurrentQueue<(NodeSelectedInfo[] seletedNodes, int count)> _dispatchQueue;
 
-    public float TolerableError { get; set; }
-
     public bool Inited { get; private set; } = false;
 
     public static readonly int MaxNodeInSelect = 200;
@@ -77,22 +75,21 @@ internal class TerrainProcessor : IDisposable
 
     #endregion
 
-    public TerrainProcessor(Terrain terrain, TerrainMesh? planeMesh, TerrainMesh? skirtMesh, MapDefinition definition)
+    public TerrainProcessor(Terrain terrain, TerrainMesh? planeMesh, TerrainMesh? skirtMesh)
     {
         _terrain = terrain;
         _planeMesh = planeMesh;
         _skirtMesh = skirtMesh;
-        _geometricVT = terrain.GeometricVT;
-        TolerableError = definition.TerrainTolerableError;
+        _geometricVT = terrain.Data.GeometricVT;
         _arrayPool = ArrayPool<NodeSelectedInfo>.Create(MaxNodeInSelect, 2);
         _dispatchQueue = new ConcurrentQueue<(NodeSelectedInfo[] seletedNodes, int count)>();
         _currentSelectedNodes = _arrayPool.Rent(MaxNodeInSelect);
         _dispatchCallable = Callable.From(DispatchBatches);
         CalcLodParameters(terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, (int)terrain.LeafNodeSize);
-        CreateQuadTree(terrain, definition);
+        CreateQuadTree(terrain);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            InitPipeline(terrain, definition);
+            InitPipeline(terrain);
             Inited = true;
         }));
     }
@@ -106,8 +103,9 @@ internal class TerrainProcessor : IDisposable
             nodeSelectedInfos = _currentSelectedNodes,
             planes = planes,
             viewerPos = camera.GlobalPosition,
-            tolerableError = TolerableError,
+            tolerableError = _terrain!.TolerableError,
             nodeSelectedCount = 0,
+            heightScale = _terrain!.HeightScale
         };
         _quadTree.Select(ref selectDesc);
         UpdateVirtualTexture(selectDesc.nodeSelectedInfos, selectDesc.nodeSelectedCount);
@@ -181,12 +179,10 @@ internal class TerrainProcessor : IDisposable
         _leafNodeY = (int)MathF.Ceiling((mapRasterSizeY - 1) / (float)leafNodeSize);
     }
     
-    private void InitPipeline(Terrain terrain, MapDefinition definition)
+    private void InitPipeline(Terrain terrain)
     {   
         Debug.Assert(_planeMesh != null && _skirtMesh != null);
-        Debug.Assert(terrain.Data.Heightmap != null);
 
-        GDTexture2D heightmap = terrain.Data.Heightmap;
         _planeInstancedBuffer = GDBuffer.CreateManaged(_planeMesh.GetInstanceBuffer());
         _planeIndirectBuffer = GDBuffer.CreateManaged(_planeMesh.GetDrawIndirectBuffer());
         _skirtInstancedBuffer = GDBuffer.CreateManaged(_skirtMesh.GetInstanceBuffer());
@@ -272,7 +268,7 @@ internal class TerrainProcessor : IDisposable
         _computePipeline = rd.ComputePipelineCreate(_computeShader);
 
     }
-    private void CreateQuadTree(Terrain terrain, MapDefinition definition)
+    private void CreateQuadTree(Terrain terrain)
     {
         Debug.Assert(terrain.ActiveCamera != null);
         Debug.Assert(terrain.Data.MinMaxErrorMaps != null);
@@ -314,7 +310,7 @@ internal class TerrainProcessor : IDisposable
     {
         Debug.Assert(_geometricVT != null);
         Debug.Assert(_terrain != null);
-        int lodOffset = _terrain.HeightmapLodOffset;
+        int lodOffset = _terrain.Data.HeightmapLodOffset;
         int pageMip = Math.Max(lod - lodOffset, 0);
         int nodeSize = (int)_terrain.LeafNodeSize << lod;
         int x = nodeX * nodeSize;

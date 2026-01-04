@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -16,7 +16,6 @@ public class MinMaxErrorMap
 
     public int Height;
 
-    // 构造函数保持不变
     private MinMaxErrorMap(int dimX, int dimY)
     {
         Width = (ushort)dimX;
@@ -24,11 +23,9 @@ public class MinMaxErrorMap
         _data = new float[dimX * dimY * 3];
     }
 
-    // GetSubNodesExist 保持不变，但使用位移操作优化
     public void GetSubNodesExist(int parentX, int parentY,
         out bool subTLExist, out bool subTRExist, out bool subBLExist, out bool subBRExist)
     {
-        // 优化：使用位移操作 (Left Shift)
         int x = parentX << 1;
         int y = parentY << 1;
 
@@ -38,12 +35,12 @@ public class MinMaxErrorMap
         subBRExist = (x + 1) < Width && (y + 1) < Height;
     }
 
-    public void GetMinMaxError(int x, int y, out float min, out float max, out float geometricError)
+    public void GetMinMaxError(int x, int y, float heightScale, out float min, out float max, out float geometricError)
     {
         int index = x + y * Width;
-        min = _data[index * 3] / 65535 * 200f;
-        max = _data[index * 3 + 1] / 65535 * 200f;
-        geometricError = _data[index * 3 + 2] / 65535 * 200f;
+        min = _data[index * 3] / 65535 * heightScale;
+        max = _data[index * 3 + 1] / 65535 * heightScale;
+        geometricError = _data[index * 3 + 2] / 65535 * heightScale;
     }
     public static void SaveAll(MinMaxErrorMap[] maps, string filePath)
     {
@@ -57,7 +54,6 @@ public class MinMaxErrorMap
             writer.Write(map.Width);
             writer.Write(map.Height);
 
-            // 极速写入：直接内存拷贝
             int byteCount = map._data.Length * 4;
             ReadOnlySpan<byte> byteView = MemoryMarshal.AsBytes(map._data.AsSpan());
             writer.Write(byteView);

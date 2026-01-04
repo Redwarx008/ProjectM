@@ -26,6 +26,7 @@ public class TerrainQuadTree
         public ReadOnlySpan<Plane> planes;
         public Vector3 viewerPos;
         public float tolerableError;
+        public float heightScale;
     }
 
     private float _kFactor;
@@ -64,7 +65,7 @@ public class TerrainQuadTree
     {
         int nodeX = x / size;
         int nodeY = y / size;
-        _minMaxErrorMaps![lodLevel].GetMinMaxError(nodeX, nodeY, out float minZ, out float maxZ, out float geometricError);
+        _minMaxErrorMaps![lodLevel].GetMinMaxError(nodeX, nodeY, selectDesc.heightScale,out float minZ, out float maxZ, out float geometricError);
         var boundsMin = new Vector3(x, minZ, y);
         var boundsMax = new Vector3(x + size, maxZ, y + size);
         IntersectType cullResult = parentCompletelyInFrustum ? IntersectType.Inside :

@@ -19,14 +19,12 @@ public partial class TerrainTest : Node3D
 
     private Camera3D? _camera;
 
-    private MapDefinition _map;
-    public async override void _Ready()
+    public override void _Ready()
     {
         base._Ready();
-        _map = await MapDefinition.LoadFromJsonFileAsync(VirtualFileSystem.Instance.ResolvePath("Map/descriptor.json"));
         if (_terrain != null)
         {
-            _terrain.Init(_map);
+            _terrain.Load();
             _camera = _terrain.ActiveCamera;
             Logger.Info("terrain init");
         }

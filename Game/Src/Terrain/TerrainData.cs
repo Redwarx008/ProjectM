@@ -1,6 +1,7 @@
 
 using Core;
 using Godot;
+using ProjectM;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -10,14 +11,15 @@ using Logger = Core.Logger;
 
 public class TerrainData : IDisposable
 {
-    public GDTexture2D? Heightmap { get; private set; }
-    
+    public VirtualTexture? GeometricVT { get; private set; } // height or normal
+
     public Texture2D? DebugGridTexture { get; private set; }
 
     public MinMaxErrorMap[]? MinMaxErrorMaps { get; private set; }
 
     public int GeometricWidth { get; private set; }
     public int GeometricHeight { get; private set; }
+    public int HeightmapLodOffset { get; private set; }
 
     private Terrain _terrain;
 
@@ -29,16 +31,13 @@ public class TerrainData : IDisposable
     /// <summary>
     /// Notice: Must be called On rendering thread.
     /// </summary>
-    public void Load(MapDefinition definition)
+    public void Load()
     {
-        LoadHeightmap(definition, out int width, out int height, out byte[]? data);
-        GeometricWidth = width;
-        GeometricHeight = height;
-        Debug.Assert(data != null);
+        LoadMinMaxErrorMaps();
+        LoadHeightMapVT();
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            CreateHeightmapTexture(width, height, data);
-            LoadTextures(definition);
+            LoadTextures();
         }));
     }
     
@@ -46,62 +45,17 @@ public class TerrainData : IDisposable
     {
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            Heightmap?.Dispose();
+            GeometricVT?.Dispose();
         }));
     }
 
-    private void LoadTextures(MapDefinition definition)
+    private void LoadTextures()
     {
         DebugGridTexture = GD.Load<Texture2D>("res://EditorAssets/Textures/Grid_Gray_128x128.png");
         _terrain.SetMaterialParameter("u_debugGridTexture", DebugGridTexture);
     }
-    private void LoadHeightmap(MapDefinition definition, out int width, out int height, out byte[]? data)
-    {
-        string? heightmapFile = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.png");
-        if (!File.Exists(heightmapFile))
-        {
-            Logger.Error($"Can't find heightmap file at {heightmapFile}.");
-            width = 0;
-            height = 0;
-            data = null;
-            return;
-        }
 
-        using var stream = File.OpenRead(heightmapFile);
-
-        int _width;
-        int _height;
-        var stbiContext = new StbImageSharp.StbImage.stbi__context(stream);
-        ReadOnlySpan<byte> _data;
-        unsafe
-        {
-            int channels;
-            ushort* buffer = StbImageSharp.StbImage.stbi__load_and_postprocess_16bit(stbiContext, &_width, &_height, &channels, 1);
-            ReadOnlySpan<ushort> bufferSpan = new Span<ushort>(buffer, _width * _height * channels);
-            _data = MemoryMarshal.AsBytes(bufferSpan);
-        }
-        width = _width; height = _height; data = _data.ToArray();
-    }
-
-    private void CreateHeightmapTexture(int width, int height, byte[] data)
-    {
-        var heightmapFormat = new GDTextureDesc()
-        {
-            Format = RenderingDevice.DataFormat.R16Unorm,
-            Width = (uint)width,
-            Height = (uint)height,
-            Mipmaps = 1,
-            UsageBits = RenderingDevice.TextureUsageBits.CanUpdateBit |
-                RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.CanCopyFromBit
-        };
-        Heightmap = GDTexture2D.Create(heightmapFormat, data);
-
-        _terrain.SetMaterialParameter("u_heightmap", Heightmap.ToTexture2d());
-        _terrain.SetMaterialParameter("u_heightmapSize",
-            new Vector2I((int)Heightmap.Width, (int)Heightmap.Height));
-    }
-
-    public void LoadMinMaxErrorMaps()
+    private void LoadMinMaxErrorMaps()
     {
         string? file = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.height");
         if (!File.Exists(file))
@@ -110,5 +64,37 @@ public class TerrainData : IDisposable
             return;
         }
         MinMaxErrorMaps = MinMaxErrorMap.LoadAll(file);
+    }
+
+    private void LoadHeightMapVT()
+    {
+        VirtualTextureDesc[] descs =
+{
+            new VirtualTextureDesc()
+            {
+                format = RenderingDevice.DataFormat.R16Unorm,
+                filePath = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.svt")!
+            }
+        };
+        GeometricVT = new VirtualTexture(Terrain.MaxVTPageCount, descs);
+        GeometricWidth = GeometricVT.Width;
+        GeometricHeight = GeometricVT.Height;
+        CalcHeightmapLodOffsetToMip(GeometricVT.TileSize, (int)_terrain.LeafNodeSize);
+    }
+
+    private void CalcHeightmapLodOffsetToMip(int pageSize, int leafNodeSize)
+    {
+        //int lodOffsetToMip = 0;
+        //while (leafNodeSize < pageSize)
+        //{
+        //    leafNodeSize *= 2;
+        //    ++lodOffsetToMip;
+        //}
+        //return lodOffsetToMip;
+
+        int offset = System.Numerics.BitOperations.Log2((uint)pageSize) -
+                     System.Numerics.BitOperations.Log2((uint)leafNodeSize);
+
+        HeightmapLodOffset = Math.Max(0, offset);
     }
 }
