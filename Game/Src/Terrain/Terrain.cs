@@ -22,7 +22,7 @@ public partial class Terrain : Node3D
 
     public static readonly int MaxLodCount = 10;
 
-    public static readonly uint MaxVTPageCount = 200;
+    public static readonly uint MaxVTPageCount = 400;
 
     [Export]
     public float TolerableError { get; set; } = 9f;
@@ -44,7 +44,7 @@ public partial class Terrain : Node3D
         }
     }
 
-    private float _heightScale = 100f;
+    private float _heightScale = 200f;
 
     public float ViewPortWidth { get; private set; }
 
@@ -132,22 +132,16 @@ public partial class Terrain : Node3D
     private void InitMaterialParameters()
     {
         Debug.Assert(Data.GeometricVT != null);
+        GDTexture2D? pageTable = Data.GeometricVT.GetIndirectTexture();
+        Debug.Assert(pageTable != null);
         SetMaterialParameter("u_heightScale", HeightScale);
         SetMaterialParameter("u_baseChunkSize", LeafNodeSize);
         SetMaterialParameter("u_PagePadding", Data.GeometricVT.Padding);
         SetMaterialParameter("u_VTPhysicalHeightmap", Data.GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
-        Texture2Drd[] pageTable = new Texture2Drd[VirtualTexture.MaxPageTableMipInGpu];
-        for (int i = 0; i < Data.GeometricVT.MipCount; ++i)
-        {
-            pageTable[i] = Data.GeometricVT.GetPageTableInMipLevel(i);
-        }
-        for(int i = Data.GeometricVT.MipCount; i < VirtualTexture.MaxPageTableMipInGpu; ++i)
-        {
-            pageTable[i] = Data.GeometricVT.GetPageTableInMipLevel(Data.GeometricVT.MipCount - 1);
-        }
-        SetMaterialParameter("u_VTPageTable", pageTable);
+        SetMaterialParameter("u_VTPageTable", pageTable.ToTexture2d());
         SetMaterialParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
         SetMaterialParameter("u_heightmapSize",new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
+        SetMaterialParameter("u_VTPageTableSize", Data.GeometricVT.GetIndirectTextureSize());
     }
 
     private void CreateMesh()

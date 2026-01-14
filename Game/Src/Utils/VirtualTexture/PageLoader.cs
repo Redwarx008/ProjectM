@@ -59,7 +59,7 @@ internal class PageLoader : IDisposable
         _fileHandle = File.OpenHandle(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.RandomAccess);
         _fileLength = RandomAccess.GetLength(_fileHandle);
         ReadHeaderAndPrecalculateOffsets();
-        _bufferAllocator = new PageBufferAllocator(_bytesPerTile, maxPageLoadedCount);
+        _bufferAllocator = new PageBufferAllocator(_bytesPerTile, 999);
     }
 
     private void ReadHeaderAndPrecalculateOffsets()

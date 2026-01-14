@@ -50,11 +50,9 @@ internal class TerrainProcessor : IDisposable
 
     private ArrayPool<NodeSelectedInfo> _arrayPool;
 
-    private ConcurrentQueue<(NodeSelectedInfo[] seletedNodes, int count)> _dispatchQueue;
-
     public bool Inited { get; private set; } = false;
 
-    public static readonly int MaxNodeInSelect = 200;
+    public static readonly int MaxNodeInSelect = 1000;
 
     #region Data struct Definition
 
@@ -82,9 +80,7 @@ internal class TerrainProcessor : IDisposable
         _skirtMesh = skirtMesh;
         _geometricVT = terrain.Data.GeometricVT;
         _arrayPool = ArrayPool<NodeSelectedInfo>.Create(MaxNodeInSelect, 2);
-        _dispatchQueue = new ConcurrentQueue<(NodeSelectedInfo[] seletedNodes, int count)>();
         _currentSelectedNodes = _arrayPool.Rent(MaxNodeInSelect);
-        _dispatchCallable = Callable.From(DispatchBatches);
         CalcLodParameters(terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, (int)terrain.LeafNodeSize);
         CreateQuadTree(terrain);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
@@ -116,31 +112,17 @@ internal class TerrainProcessor : IDisposable
     {
         if (selectedCount <= 0) return;
 
-        _dispatchQueue.Enqueue((_currentSelectedNodes, selectedCount));
+        var arrayToSubmit = _currentSelectedNodes;
 
         _currentSelectedNodes = _arrayPool.Rent(MaxNodeInSelect);
 
-        RenderingServer.CallOnRenderThread(_dispatchCallable); //todo: 直接提交DispatchOneBatch当Callable.Bind可用时，当前这样做是为了避免每帧创建闭包
-    }
-
-    private void DispatchBatches()
-    {
-        while (_dispatchQueue.TryDequeue(out var task))
+        RenderingServer.CallOnRenderThread(Callable.From(()=>
         {
-            NodeSelectedInfo[] array = task.seletedNodes;
-            int count = task.count;
-
-            try
-            {
-                DispatchOneBatch(array, count);
-            }
-            finally
-            {
-                _arrayPool.Return(array, clearArray: false);
-            }
-        }
+            Dispatch(arrayToSubmit, selectedCount);
+            _arrayPool.Return(arrayToSubmit, clearArray: false);
+        })); //todo: 直接提交DispatchOneBatch当Callable.Bind可用时，
     }
-    private void DispatchOneBatch(
+    private void Dispatch(
         NodeSelectedInfo[] selected, int selectedCount)
     {
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
@@ -209,7 +191,7 @@ internal class TerrainProcessor : IDisposable
         uint nodeSelectedInfoBufferSize;
         unsafe
         {
-            nodeSelectedInfoBufferSize = (uint)(sizeof(int) + 4 + Constants.MaxNodeInSelect * sizeof(NodeSelectedInfo)); // counter + padding + [NodeSelectedInfo] * n
+            nodeSelectedInfoBufferSize = (uint)(sizeof(int) + 4 + MaxNodeInSelect * sizeof(NodeSelectedInfo)); // counter + padding + [NodeSelectedInfo] * n
         }
         _nodeSelectedInfoBuffer = GDBuffer.CreateStorage(nodeSelectedInfoBufferSize);
 
@@ -277,6 +259,8 @@ internal class TerrainProcessor : IDisposable
         float tanHalfFov = MathF.Tan(0.5f * horizontalFov * MathF.PI / 180f);
         float K = viewPortWidth / (2 * tanHalfFov);
         _quadTree = new TerrainQuadTree((int)terrain.LeafNodeSize, K, terrain.Data.MinMaxErrorMaps);
+        //_quadTree = new TerrainQuadTree((int)terrain.LeafNodeSize, K,
+        //    MinMaxErrorMap.CreateDefault((int)terrain.LeafNodeSize, terrain.Data.GeometricWidth, terrain.Data.GeometricHeight, _lodCount));
     }
 
     public void Dispose()

@@ -5,7 +5,7 @@
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 
-layout(set = 0, binding = 0, rg16ui) uniform uimage2D pageTable[8];
+layout(set = 0, binding = 0, rg16ui) uniform uimage2D pageTable[10];
 
 layout(push_constant, std430) uniform ClearParams {
 	ivec2 clearOrigin;

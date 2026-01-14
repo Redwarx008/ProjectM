@@ -35,12 +35,12 @@ public class MinMaxErrorMap
         subBRExist = (x + 1) < Width && (y + 1) < Height;
     }
 
-    public void GetMinMaxError(int x, int y, float heightScale, out float min, out float max, out float geometricError)
+    public void GetMinMaxError(int x, int y, out float min, out float max, out float geometricError)
     {
         int index = x + y * Width;
-        min = _data[index * 3] / 65535 * heightScale;
-        max = _data[index * 3 + 1] / 65535 * heightScale;
-        geometricError = _data[index * 3 + 2] / 65535 * heightScale;
+        min = _data[index * 3];
+        max = _data[index * 3 + 1];
+        geometricError = _data[index * 3 + 2];
     }
     public static void SaveAll(MinMaxErrorMap[] maps, string filePath)
     {
@@ -87,6 +87,22 @@ public class MinMaxErrorMap
                 throw new EndOfStreamException($"Expected {byteView.Length} bytes but read {bytesRead} at LOD {i}");
             }
             maps[i] = map;
+        }
+        return maps;
+    }
+
+    public static MinMaxErrorMap[] CreateDefault(int leafNodeSize, int l0Width, int l0Height, int mipmaps)
+    {
+        var maps = new MinMaxErrorMap[mipmaps];
+        int width = l0Width;
+        int height = l0Height;
+        for (int mip = 0; mip < mipmaps; ++mip)
+        {
+            int nodeSize = leafNodeSize << mip;
+            int nodeCountX = (l0Width + nodeSize - 1) / nodeSize;
+            int nodeCountY = (l0Height + nodeSize - 1) / nodeSize;
+            var map = new MinMaxErrorMap(nodeCountX, nodeCountY);
+            maps[mip] = map;
         }
         return maps;
     }

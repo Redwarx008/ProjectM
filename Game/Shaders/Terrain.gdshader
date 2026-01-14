@@ -12,9 +12,11 @@ uniform mat3 u_inverseTransposedTransform;
 //format: rg32f
 //r: Physical Layer Index
 //g: Active LOD
-uniform usampler2D u_VTPageTable[8] : filter_nearest, repeat_disable;
+uniform usampler2D u_VTPageTable : filter_nearest, repeat_disable;
 // Array Layer = Physical Slot Index
 uniform sampler2DArray u_VTPhysicalHeightmap : repeat_disable;
+
+uniform ivec2 u_VTPageTableSize[10];
 
 uniform int u_PagePadding;
 uniform int u_HeightmapLodOffset;
@@ -28,47 +30,47 @@ varying vec4 v_debugColor;
 
 varying flat int v_RequestHeightMip;
 
-uvec4 SamplePageTable(vec2 globalUv, int requestMip)
+ivec2 PageTableSize(int mip)
 {
-	// idk how to avoid this, we can't index with not constant in glsl in AMD device.
-	switch(requestMip)
-	{
-		case 0: return textureLod(u_VTPageTable[0], globalUv, 0);
-		case 1: return textureLod(u_VTPageTable[1], globalUv, 0);
-		case 2: return textureLod(u_VTPageTable[2], globalUv, 0);
-		case 3: return textureLod(u_VTPageTable[3], globalUv, 0);
-		case 4: return textureLod(u_VTPageTable[4], globalUv, 0);
-		case 5: return textureLod(u_VTPageTable[5], globalUv, 0);
-		case 6: return textureLod(u_VTPageTable[6], globalUv, 0);
-		case 7: return textureLod(u_VTPageTable[7], globalUv, 0);
-	}
+
+	return textureSize(u_VTPageTable, mip);
 }
 
-ivec2 PageTableSize(uint mip)
+ivec2 RealPageTableSize(int mip)
 {
-	switch(mip)
-	{
-		case 0u: return textureSize(u_VTPageTable[0], 0);
-		case 1u: return textureSize(u_VTPageTable[1], 0);
-		case 2u: return textureSize(u_VTPageTable[2],  0);
-		case 3u: return textureSize(u_VTPageTable[3],  0);
-		case 4u: return textureSize(u_VTPageTable[4],  0);
-		case 5u: return textureSize(u_VTPageTable[5],  0);
-		case 6u: return textureSize(u_VTPageTable[6],  0);
-		case 7u: return textureSize(u_VTPageTable[7],  0);
-	}
+	//switch(mip)
+	//{
+		//case 0u: return ivec2(u_VTPageTableSize[0]);
+		//case 1u: return ivec2(u_VTPageTableSize[1]);
+		//case 2u: return ivec2(u_VTPageTableSize[2]);
+		//case 3u: return ivec2(u_VTPageTableSize[3]);
+		//case 4u: return ivec2(u_VTPageTableSize[4]);
+		//case 5u: return ivec2(u_VTPageTableSize[5]);
+		//case 6u: return ivec2(u_VTPageTableSize[6]);
+		//case 7u: return ivec2(u_VTPageTableSize[7]);
+	//}
+	return ivec2(u_VTPageTableSize[mip]);
 }
 
 vec3 GetVirtualTextureUV(vec2 globalUv, int requestMip)
 {
-	uvec4 pageInfo = SamplePageTable(globalUv, requestMip);
+    // 获取当前LOD下虚拟纹理的实际页面数（不包含填充）
+    ivec2 virtualPageCount = RealPageTableSize(requestMip);
+    // 获取PageTable纹理的尺寸（包含填充）
+    ivec2 pageTableSize = PageTableSize(requestMip);
+	// 将globalUv映射到实际页面数范围内，避免采样到填充区域
+    vec2 effectiveUv = globalUv * vec2(virtualPageCount) / vec2(pageTableSize);
+
+	uvec2 pageInfo = textureLod(u_VTPageTable, effectiveUv, float(requestMip)).xy;
 
 	uint physSlot = pageInfo.x;
 	uint activeLod = pageInfo.y;
+
 	// 当前 Active LOD 下，整个地形被切分为 gridDimX * gridDimY 个页面
-	ivec2 gridDim = PageTableSize(activeLod);
-    vec2 clampedUv = clamp(globalUv, 0.0, 1.0 - 1e-7);
-    vec2 uvInPage = fract(clampedUv * vec2(gridDim));
+	ivec2 gridDim = PageTableSize(int(activeLod));
+    effectiveUv = clamp(effectiveUv, 0.0, 1.0 - 1e-7);
+    vec2 uvInPage = fract(vec2(gridDim) * effectiveUv);
+
 	vec2 paddedPageSize = vec2(textureSize(u_VTPhysicalHeightmap, 0).xy);
 	vec2 pageSize = paddedPageSize -  2.0 * vec2(float(u_PagePadding));
 	// 算出在Physical纹理上的像素坐标 (加上左上角的 Padding)
@@ -80,7 +82,7 @@ vec3 GetVirtualTextureUV(vec2 globalUv, int requestMip)
 float SampleHeightVT(vec2 globalUv, int requestMip)
 {
 	vec3 virtualTextureUV = GetVirtualTextureUV(globalUv, requestMip);
-	return texture(u_VTPhysicalHeightmap, virtualTextureUV).r * u_heightScale;
+	return textureLod(u_VTPhysicalHeightmap, virtualTextureUV, 0).r * u_heightScale;
 }
 
 vec3 CalculateNormalVT(vec2 uv, int requestMip)
@@ -100,7 +102,7 @@ vec3 CalculateNormalVT(vec2 uv, int requestMip)
 
 vec4 DebugColor(vec2 globalUV, int requestMip)
 {
-	uvec4 pageInfo = SamplePageTable(globalUV, requestMip);
+	uvec4 pageInfo = textureLod(u_VTPageTable, globalUV , float(requestMip));
 
 	uint activeLod = pageInfo.y;
 		//float debug;

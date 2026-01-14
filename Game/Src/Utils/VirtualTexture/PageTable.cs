@@ -142,9 +142,7 @@ internal unsafe class PageTable : IDisposable
         public Vector2I value;
     }
 
-    public GDTexture2D[] IndirectTextures { get; private set; }
-
-
+    public GDTexture2D? IndirectTexture { get; private set; }
 
     // 二维数组：第一维是 Mip 层级，第二维是莫顿排序的 Entry 数组
     private PageEntry** _mipBasePages;
@@ -166,16 +164,19 @@ internal unsafe class PageTable : IDisposable
 
     private Rid _shader;
 
+    private Rid[] _textureViewPerMip;
+
     private bool _pipelineInited;  //todo: 可能并不需要?
 
     public int DynamicPageOffset { get; set; } = int.MaxValue;
-
     public int PersistentMipWidth { get; private set; }
-
     public int PersistentMipHeight { get; private set; }
-    public PageTable(int l0Width, int l0Height, int tileSize, int maxPhysicalPages, int mipCount)
+
+    public static int CMaxPageTableSize = 2048;
+
+    public PageTable(int l0Width, int l0Height, int tileSize, int mipCount)
     {
-        IndirectTextures = new GDTexture2D[mipCount];
+        _textureViewPerMip = new Rid[mipCount];
         _setArrayPool = new SortedSetArrayPool(mipCount, new PageUpdateInfoComparer());
         _activeMapSets = _setArrayPool.Rent();
         _activeRemapSets = _setArrayPool.Rent();
@@ -184,27 +185,20 @@ internal unsafe class PageTable : IDisposable
         CalculateLayout(l0Width, l0Height, tileSize);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            int width = l0Width;
-            int height = l0Height;
-            for (int mip = 0; mip < mipCount; ++mip)
+            int persistentMipRange = (1 << _persistentMip);
+            int width = PersistentMipWidth * persistentMipRange;
+            int height = PersistentMipHeight * persistentMipRange;
+
+            var desc = new GDTextureDesc()
             {
-                int pageCountX = (int)Math.Ceiling(width / (float)tileSize);
-                int pageCountY = (int)Math.Ceiling(height / (float)tileSize);
-                var desc = new GDTextureDesc()
-                {
-                    Format = Godot.RenderingDevice.DataFormat.R16G16Uint,
-                    Width = (uint)pageCountX,
-                    Height = (uint)pageCountY,
-                    Mipmaps = 1,
-                    UsageBits = Godot.RenderingDevice.TextureUsageBits.StorageBit | Godot.RenderingDevice.TextureUsageBits.SamplingBit
-            | Godot.RenderingDevice.TextureUsageBits.CanCopyToBit | Godot.RenderingDevice.TextureUsageBits.CanCopyFromBit
-                };
-                IndirectTextures[mip] = GDTexture2D.Create(desc);
-                width = (int)Math.Ceiling(width * 0.5f);
-                height = (int)Math.Ceiling(height * 0.5f);
-            }
-            Debug.Assert(PersistentMipWidth == (int)IndirectTextures[IndirectTextures.Length - 1].Width);
-            Debug.Assert(PersistentMipHeight == (int)IndirectTextures[IndirectTextures.Length - 1].Height);
+                Format = Godot.RenderingDevice.DataFormat.R16G16Uint,
+                Width = (uint)width,
+                Height = (uint)height,
+                Mipmaps = (uint)mipCount,
+                UsageBits = Godot.RenderingDevice.TextureUsageBits.StorageBit | Godot.RenderingDevice.TextureUsageBits.SamplingBit
+|                   Godot.RenderingDevice.TextureUsageBits.CanCopyToBit | Godot.RenderingDevice.TextureUsageBits.CanCopyFromBit
+            };
+            IndirectTexture = GDTexture2D.Create(desc);
             BuildPipeline();
             _pipelineInited = true;
         }));
@@ -269,17 +263,18 @@ internal unsafe class PageTable : IDisposable
             if (node.mip < 0)
                 continue;
 
+            (int x, int y) = MathExtension.DecodeMorton((uint)node.morton);
+
+            if (!IsValid(node.mip, x, y))
+            {
+                continue;
+            }
+
             PageEntry* entry =
                 _mipBasePages[node.mip] + node.morton;
 
             if (entry->mappingSlot == -1 ||
                     entry->activeMip != node.mip)
-            {
-                continue;
-            }
-            (int x, int y) = MathExtension.DecodeMorton((uint)node.morton);
-
-            if(!IsValid(node.mip, x, y))
             {
                 continue;
             }
@@ -497,6 +492,8 @@ internal unsafe class PageTable : IDisposable
 
     private void BuildPipeline()
     {
+        Debug.Assert(IndirectTexture != null);
+
         var rd = RenderingServer.GetRenderingDevice();
 
         _shader = ShaderHelper.CreateComputeShader("res://Shaders/Compute/PageTableUpdate.glsl");
@@ -506,14 +503,16 @@ internal unsafe class PageTable : IDisposable
             UniformType = RenderingDevice.UniformType.Image,
             Binding = 0
         };
-        for (int mip = 0; mip < IndirectTextures.Length; ++mip)
+
+        for (int mip = 0; mip < _textureViewPerMip.Length; ++mip)
         {
-            indirectTextureBinding.AddId(IndirectTextures[mip]);
+            _textureViewPerMip[mip] = rd.TextureCreateSharedFromSlice(new RDTextureView(), IndirectTexture, 0, (uint)mip, 1);
+            indirectTextureBinding.AddId(_textureViewPerMip[mip]);
         }
         // Fill the remaining slots.
-        for (int mip = IndirectTextures.Length; mip < MaxPageTableMipInGpu; ++mip)
+        for (int mip = _textureViewPerMip.Length; mip < MaxPageTableMipInGpu; ++mip)
         {
-            indirectTextureBinding.AddId(IndirectTextures[IndirectTextures.Length - 1]);
+            indirectTextureBinding.AddId(_textureViewPerMip[_textureViewPerMip.Length - 1]);
         }
 
         _descriptorSet = rd.UniformSetCreate([indirectTextureBinding], _shader, 0);
@@ -532,14 +531,13 @@ internal unsafe class PageTable : IDisposable
             int tileY = _mipRealBounds[mip].h;
             int maxDim = Math.Max(tileX, tileY);
             int pow2 = MathExtension.GetNextPowerOfTwo(maxDim);
+            Debug.Assert(pow2 <= CMaxPageTableSize);
             nuint totalEntries = (nuint)(pow2 * pow2);
             nuint sizeInBytes = totalEntries * (nuint)sizeof(PageEntry);
             PageEntry* ptr = (PageEntry*)NativeMemory.Alloc(sizeInBytes);
             _mipBasePages[mip] = ptr;
             var span = new Span<PageEntry>(ptr, (int)totalEntries);
             span.Fill(new PageEntry(-1, _persistentMip));
-
-            var comparer = new PageUpdateInfoComparer();
         }
 
     }
@@ -586,24 +584,34 @@ internal unsafe class PageTable : IDisposable
         {
             var rd = RenderingServer.GetRenderingDevice();
             rd.FreeRid(_shader);
-            foreach (var texture in IndirectTextures)
-            {
-                texture.Dispose();
-            }
+            IndirectTexture?.Dispose();
         }));
+    }
+
+    public Vector2[] GetRealMipBounds()
+    {
+        var result = new Vector2[MaxPageTableMipInGpu];
+        for(int i = 0; i < _mipRealBounds.Length; ++i)
+        {
+            result[i] = new Vector2(_mipRealBounds[i].w, _mipRealBounds[i].h);
+        }
+        for (int i = _mipRealBounds.Length; i < MaxPageTableMipInGpu; ++i)
+        {
+            result[i] = new Vector2(_mipRealBounds[^1].w, _mipRealBounds[^1].h);
+        }
+        return result;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static VirtualPageID MapToAncestor(VirtualPageID id, int ancestorMip)
     {
         int delta = ancestorMip - id.mip;
-        float scale = 1 << delta;
 
         return new VirtualPageID
         {
             mip = ancestorMip,
-            x = (int)MathF.Floor((id.x + 0.5f) / scale),
-            y = (int)MathF.Floor((id.y + 0.5f) / scale)
+            x = id.x >> delta,
+            y = id.y >> delta
         };
     }
 

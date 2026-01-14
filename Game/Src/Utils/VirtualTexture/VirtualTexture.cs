@@ -51,7 +51,7 @@ public class VirtualTexture : IDisposable
     public int ProcessLimit { get; set; } = 15;
     public bool Inited { get; private set; }
 
-    public static readonly int MaxPageTableMipInGpu = 8;
+    public static readonly int MaxPageTableMipInGpu = 10;
 
     private PageTable _pageTable;
     private PageCache _pageCache;
@@ -59,8 +59,6 @@ public class VirtualTexture : IDisposable
     private StreamingManager _streamer;
 
     private int _loadedPersistentCount = 0;
-
-    private bool _persistentReady = false;
 
     private readonly List<VirtualPageID> _pendingRequests = [];
 
@@ -83,7 +81,7 @@ public class VirtualTexture : IDisposable
         Height = vTInfo.height;
         TileSize = vTInfo.tileSize;
         Padding = vTInfo.padding;
-        _pageTable = new PageTable(Width, Height, TileSize, (int)maxPageCount, MipCount);
+        _pageTable = new PageTable(Width, Height, TileSize, MipCount);
         _pageCache = new PageCache(_pageTable, MipCount, (int)(maxPageCount - _pageTable.DynamicPageOffset));
         _physicalTexture = new PhysicalTexture(maxPageCount, _pageTable.DynamicPageOffset, vTInfo, vtDescs);
         _onRemovePage = id =>
@@ -145,29 +143,35 @@ public class VirtualTexture : IDisposable
             _loadedPendingPages.Add(result);
         }
 
-        int processCount = Math.Min(_loadedPendingPages.Count, ProcessLimit);
-        for (int i = 0; i < processCount; ++i)
+        int dynamicBudget = ProcessLimit;
+
+        for (int i = 0; i < _loadedPendingPages.Count; ++i)
         {
-            int targetSlot;
             var loadedPage = _loadedPendingPages[i];
-            if (loadedPage.id.mip == persistentMip)
+
+            bool isPersistent = loadedPage.id.mip == persistentMip;
+            if (!isPersistent && dynamicBudget <= 0)
+            {
+                DiscardPage(loadedPage);
+                continue;
+            }
+
+            int targetSlot;
+
+            if (isPersistent)
             {
                 _pageCache.TryGetPhysicalSlot(loadedPage.id, out targetSlot);
                 CommitUpdate(loadedPage, targetSlot);
                 _loadedPersistentCount++;
-                if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
-                {
-                    _persistentReady = true;
-                    Logger.Info("[VT] Persistent Pages Ready");
-                }
+                Debug.WriteLineIf(_loadedPersistentCount == _pageTable.DynamicPageOffset, "[VT] Persistent Pages Ready");
+                //if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
+                //{
+                //    Logger.Info();
+                //}
             }
             else
             {
-                if (!_persistentReady)
-                {
-                    DiscardPage(loadedPage);
-                    continue;
-                }
+                --dynamicBudget;
 
                 if (_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
                 {
@@ -184,11 +188,6 @@ public class VirtualTexture : IDisposable
                     CommitUpdate(loadedPage, evictedSlot);
                 }
             }
-        }
-
-        for(int i = processCount; i < _loadedPendingPages.Count; ++i)
-        {
-            DiscardPage(_loadedPendingPages[i]);
         }
 
         _loadedPendingPages.Clear();
@@ -238,9 +237,14 @@ public class VirtualTexture : IDisposable
         return _physicalTexture[i];
     }
 
-    public GDTexture2D GetPageTableInMipLevel(int mip)
+    public GDTexture2D? GetIndirectTexture()
     {
-        return _pageTable.IndirectTextures[mip];
+        return _pageTable.IndirectTexture;
+    }
+
+    public Vector2[] GetIndirectTextureSize()
+    {
+        return _pageTable.GetRealMipBounds();
     }
 
     public void Dispose()
