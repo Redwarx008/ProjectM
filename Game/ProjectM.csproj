@@ -9,7 +9,7 @@
 	</PropertyGroup>
 	<ItemGroup>
 		<Content Include="Shaders\Compute\MinMaxErrorMapCompute.glsl" />
-		<Content Include="Shaders\Compute\TerrainCompute.glsl" />
+		<Content Include="Shaders\Compute\TerrainNodeSelect.glsl" />
 	</ItemGroup>
 	<ItemGroup>
 	  <None Include="Shaders\Compute\LodMapCompute.glsl" />
@@ -17,5 +17,8 @@
 	</ItemGroup>
 	<ItemGroup>
 	  <ProjectReference Include="..\Core\Core.csproj" />
+	</ItemGroup>
+	<ItemGroup>
+	  <Folder Include="Src\Map\" />
 	</ItemGroup>
 </Project>

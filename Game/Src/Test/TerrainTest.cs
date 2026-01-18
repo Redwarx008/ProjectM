@@ -24,7 +24,11 @@ public partial class TerrainTest : Node3D
         base._Ready();
         if (_terrain != null)
         {
-            _terrain.Load();
+            _terrain.LoadConfig(new TerrainConfig()
+            {
+                heightmapPath = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.svt"),
+                minmaxmapPath = VirtualFileSystem.Instance.ResolvePath("Map/heightmap.bounds"),
+            });
             _camera = _terrain.ActiveCamera;
             Logger.Info("terrain init");
         }

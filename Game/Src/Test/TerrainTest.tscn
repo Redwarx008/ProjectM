@@ -51,7 +51,7 @@ layout_mode = 0
 offset_top = 45.0
 offset_right = 86.0
 offset_bottom = 68.0
-text = " FPS: 145"
+text = " FPS: 144"
 
 [node name="CameraPosLabel" type="Label" parent="Control/Panel" unique_id=786647067]
 layout_mode = 1
@@ -62,7 +62,7 @@ offset_left = 5.0
 offset_top = -23.0
 offset_right = 141.0
 grow_vertical = 0
-text = "Camera Positon: (3794, 1978, 3127)"
+text = "Camera Positon: (2713, 63, 2250)"
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=2053924107]
 transform = Transform3D(1, 0, 0, 0, 0.07247233, 0.9973704, 0, -0.9973704, 0.07247233, 3117.067, 100, 2313.5452)
@@ -72,3 +72,7 @@ script = ExtResource("2_pvoya")
 [node name="Terrain" type="Node3D" parent="." unique_id=458070647 node_paths=PackedStringArray("_activeCamera")]
 script = ExtResource("1_pvoya")
 _activeCamera = NodePath("../../../../../../../../../@Node3DEditor@10752/@HSplitContainer@10201/@HSplitContainer@10203/@VSplitContainer@10205/@Node3DEditorViewportContainer@10206/@Node3DEditorViewport@10255/@SubViewportContainer@10207/@SubViewport@10208/@Camera3D@10210")
+GridSize = 16
+HeightScale = 200.0
+MorphRange = 0.2
+SubdivisionDistanceFactor = 2.0

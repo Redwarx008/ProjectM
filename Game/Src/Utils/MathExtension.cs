@@ -76,7 +76,7 @@ public static class MathExtension
     public static Vector4 ToVector4(this Plane plane)
     {
         // godot的frustum plane 法线指向视锥体外, 在这里反转法线向量
-        return new Vector4(-plane.X, -plane.Y, -plane.Z, plane.D);
+        return new Vector4(plane.X, plane.Y, plane.Z, -plane.D);
     }
 
     public enum IntersectType

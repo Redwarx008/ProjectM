@@ -6,75 +6,165 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Logger = Core.Logger;
+
+
+public struct TerrainConfig()
+{
+    public string? heightmapPath;
+    public string? splatmapPath; 
+    public string? minmaxmapPath;
+    public uint patchSize = 16;
+    public float width = 0f;
+    public float length = 0f;
+    public float height = 200f;
+    public float morphRange = 0.2f;
+    public float subdivisionDistanceFactor = 2.0f;
+}
 
 [Tool]
 public partial class Terrain : Node3D
 {
+    public static readonly int MaxLodCount = 10;
+
+    public static readonly uint MaxVTPageCount = 400;
+
     private TerrainProcessor? _processor;
+    private TerrainMesh? _mesh;
+
     [Export]
     private Camera3D? _activeCamera;
 
     public Camera3D? ActiveCamera => _activeCamera;
 
+    public ShaderMaterial Material { get; private set; } = null!;
+
     public TerrainData Data { get; private set; } = null!;
 
-    public uint LeafNodeSize { get; set; } = 32;
 
-    public static readonly int MaxLodCount = 10;
-
-    public static readonly uint MaxVTPageCount = 400;
+    #region Debug Parameters
 
     [Export]
-    public float TolerableError { get; set; } = 9f;
-
-    [Export]
-    public float HeightScale
+    public uint PatchSize
     {
-        get => _heightScale;
+        get => _patchSize;
         set
         {
-            if (_heightScale != value)
+            if (_patchSize != value)
             {
-                if (_planeMesh != null)
+                if (_mesh != null)
                 {
-                    SetMaterialParameter("u_heightScale", value);
+                    Material.SetShaderParameter("u_GridDimension", value);
                 }
-                _heightScale = value;
+                _patchSize = value;
             }
         }
     }
 
-    private float _heightScale = 200f;
+    private uint _patchSize;
 
-    public float ViewPortWidth { get; private set; }
+    [Export]
+    public float Width
+    {
+        get => _width;
+        set
+        {
+            if (_width != value)
+            {
+                if (_mesh != null)
+                {
+                    Material.SetShaderParameter("u_MapSize", new Vector2(value, Length));
+                }
+                _width = value;
+            }
+        }
+    }
+    private float _width;
 
+    [Export]
+    public float Length
+    {
+        get => _length;
+        set
+        {
+            if (_length != value)
+            {
+                if (_mesh != null)
+                {
+                    Material.SetShaderParameter("u_MapSize", new Vector2(Width, value));
+                }
+                _length = value;
+            }
+        }
+    }
+    private float _length;
 
-    private TerrainMesh? _planeMesh;
+    [Export]
+    public float Height
+    {
+        get => _height;
+        set
+        {
+            if (_height != value)
+            {
+                if (_mesh != null)
+                {
+                    Material.SetShaderParameter("u_Height", value);
+                }
+                _height = value;
+            }
+        }
+    }
 
-    private TerrainMesh? _skirtMesh;
+    private float _height;
 
-    private ShaderMaterial? _planeMaterial;
+    [Export]
+    public float MorphRange
+    {
+        get=> _morphRange;
+        set
+        {
+            if (_morphRange != value)
+            {
+                if (_mesh != null)
+                {
+                    Material.SetShaderParameter("u_MorphRange", value);
+                }
+                _morphRange = value;
+            }
+        }
+    }
 
-    private ShaderMaterial? _skirtMaterial;
+    private float _morphRange;
+
+    #endregion
+
+    public float ViewRange { get; set; } = 1000f;
+
 
     public override void _Notification(int what)
     {
         base._Notification(what);
         if (what == NotificationVisibilityChanged)
         {
-            if (_planeMesh != null)
+            if (_mesh != null)
             {
-                _planeMesh.Visible = Visible;
+                _mesh.Visible = Visible;
             }
-            if (_skirtMesh != null)
-            {
-                _skirtMesh.Visible = Visible;
-            }
+        }
+
+        if(what == NotificationLocalTransformChanged)
+        {
+            Logger.Info("Position changed");
+            Vector3 offset = Position;
+            Material.SetShaderParameter("u_MapOffset", new Vector2(offset.X, offset.Z));
+            Material.SetShaderParameter("u_HeightOffset", offset.Y);
         }
     }
 
     public override void _Ready()
     {
+        SetNotifyLocalTransform(true);
 #if !EXPORTRELEASE
         if (Engine.IsEditorHint())
         {
@@ -82,17 +172,12 @@ public partial class Terrain : Node3D
         }
 #endif
         _activeCamera ??= GetViewport().GetCamera3D();
-        ViewPortWidth = ActiveCamera!.GetViewport().GetVisibleRect().Size.X;
-        _planeMaterial = new ShaderMaterial()
+        Material = new ShaderMaterial()
         {
             Shader = GD.Load<Shader>("res://Shaders/Terrain.gdshader")
         };
-        _skirtMaterial = new ShaderMaterial()
-        {
-            Shader = GD.Load<Shader>("res://Shaders/TerrainSkirt.gdshader")
-        };
+
         Data = new TerrainData(this);
-        CreateMesh();
     }
 
     public override void _Process(double delta)
@@ -107,26 +192,23 @@ public partial class Terrain : Node3D
     public override void _ExitTree()
     {
         base._ExitTree();
-        _planeMesh?.Dispose();
-        _skirtMesh?.Dispose();
+        _mesh?.Dispose();
         _processor?.Dispose();
         Data.Dispose();
     }
 
-    public void Load()
+    public void LoadConfig(TerrainConfig config)
     {
-        Data.Load();
+        PatchSize = config.patchSize;
+        Width = config.width;
+        Length = config.length;
+        Height = config.height;
+        MorphRange = config.morphRange;
+        ViewRange = Math.Max(Width, Length) * 2;
+        Data.Load(config);
+        CreateMesh();
         InitMaterialParameters();
-        _processor = new TerrainProcessor(this, _planeMesh, _skirtMesh);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void SetMaterialParameter(StringName param, Variant value)
-    {
-        Debug.Assert(_planeMaterial != null);
-        Debug.Assert(_skirtMaterial != null);
-        _planeMaterial.SetShaderParameter(param, value);
-        _skirtMaterial.SetShaderParameter(param, value);
+        _processor = new TerrainProcessor(this, _mesh);
     }
 
     private void InitMaterialParameters()
@@ -134,22 +216,25 @@ public partial class Terrain : Node3D
         Debug.Assert(Data.GeometricVT != null);
         GDTexture2D? pageTable = Data.GeometricVT.GetIndirectTexture();
         Debug.Assert(pageTable != null);
-        SetMaterialParameter("u_heightScale", HeightScale);
-        SetMaterialParameter("u_baseChunkSize", LeafNodeSize);
-        SetMaterialParameter("u_PagePadding", Data.GeometricVT.Padding);
-        SetMaterialParameter("u_VTPhysicalHeightmap", Data.GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
-        SetMaterialParameter("u_VTPageTable", pageTable.ToTexture2d());
-        SetMaterialParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
-        SetMaterialParameter("u_heightmapSize",new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
-        SetMaterialParameter("u_VTPageTableSize", Data.GeometricVT.GetIndirectTextureSize());
+        Material.SetShaderParameter("u_MapSize", new Vector2(Width, Length));
+        Vector3 offset = Position;
+        Material.SetShaderParameter("u_MapOffset", new Vector2(offset.X, offset.Z));
+        Material.SetShaderParameter("u_HeightOffset", offset.Y);
+        Material.SetShaderParameter("u_Height", Height);
+        Material.SetShaderParameter("u_GridDimension", PatchSize);
+        Material.SetShaderParameter("u_MorphRange", MorphRange);
+        Material.SetShaderParameter("u_LodCount", Data.LodCount);
+        Material.SetShaderParameter("u_PagePadding", Data.GeometricVT.Padding);
+        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
+        Material.SetShaderParameter("u_VTPageTable", pageTable.ToTexture2d());
+        Material.SetShaderParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
+        Material.SetShaderParameter("u_HeightmapSize",new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
+        Material.SetShaderParameter("u_VTPageTableSize", Data.GeometricVT.GetIndirectTextureSize());
     }
 
     private void CreateMesh()
     {
-        _planeMesh = TerrainMesh.CreatePlane(Constants.MaxNodeInSelect, (int)LeafNodeSize, LeafNodeSize, GetWorld3D());
-        _planeMesh.Material = _planeMaterial;
-
-        _skirtMesh = TerrainMesh.CreateSkirt(Constants.MaxNodeInSelect, (int)LeafNodeSize, LeafNodeSize, GetWorld3D());
-        _skirtMesh.Material = _skirtMaterial;
+        _mesh = TerrainMesh.CreatePlane(TerrainProcessor.MaxNodeInSelect, (int)PatchSize, PatchSize, GetWorld3D());
+        _mesh.Material = Material;
     }
 }

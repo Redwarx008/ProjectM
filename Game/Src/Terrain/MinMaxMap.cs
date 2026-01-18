@@ -7,20 +7,20 @@ using System.Text;
 using System.Threading.Tasks;
 using static TerrainData;
 
-public class MinMaxErrorMap
+public class MinMaxMap
 {
-    // [min, max, error]
-    private float[] _data = null!;
+    // [min, max]
+    public ushort[] Data;
 
     public int Width;
 
     public int Height;
 
-    private MinMaxErrorMap(int dimX, int dimY)
+    private MinMaxMap(int dimX, int dimY)
     {
         Width = (ushort)dimX;
         Height = (ushort)dimY;
-        _data = new float[dimX * dimY * 3];
+        Data = new ushort[dimX * dimY * 2];
     }
 
     public void GetSubNodesExist(int parentX, int parentY,
@@ -35,14 +35,13 @@ public class MinMaxErrorMap
         subBRExist = (x + 1) < Width && (y + 1) < Height;
     }
 
-    public void GetMinMaxError(int x, int y, out float min, out float max, out float geometricError)
+    public void GetMinMax(int x, int y, out ushort min, out ushort max)
     {
         int index = x + y * Width;
-        min = _data[index * 3];
-        max = _data[index * 3 + 1];
-        geometricError = _data[index * 3 + 2];
+        min = Data[index * 2];
+        max = Data[index * 2 + 1];
     }
-    public static void SaveAll(MinMaxErrorMap[] maps, string filePath)
+    public static void SaveAll(MinMaxMap[] maps, string filePath)
     {
         using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 65536);
         using var writer = new BinaryWriter(fs);
@@ -53,13 +52,11 @@ public class MinMaxErrorMap
         {
             writer.Write(map.Width);
             writer.Write(map.Height);
-
-            int byteCount = map._data.Length * 4;
-            ReadOnlySpan<byte> byteView = MemoryMarshal.AsBytes(map._data.AsSpan());
+            ReadOnlySpan<byte> byteView = MemoryMarshal.AsBytes(map.Data.AsSpan());
             writer.Write(byteView);
         }
     }
-    public static MinMaxErrorMap[] LoadAll(string filePath)
+    public static MinMaxMap[] LoadAll(string filePath)
     {
         if (!File.Exists(filePath)) throw new FileNotFoundException("File not found", filePath);
 
@@ -67,21 +64,18 @@ public class MinMaxErrorMap
         using var reader = new BinaryReader(fs);
 
         int count = reader.ReadInt32();
-        var maps = new MinMaxErrorMap[count];
+        var maps = new MinMaxMap[count];
 
         for (int i = 0; i < count; i++)
         {
             int width = reader.ReadInt32();
             int height = reader.ReadInt32();
-            var map = new MinMaxErrorMap(width, height);
+            var map = new MinMaxMap(width, height);
 
-            Span<byte> byteView = MemoryMarshal.AsBytes(map._data.AsSpan());
+            Span<byte> byteView = MemoryMarshal.AsBytes(map.Data.AsSpan());
 
-            // 直接读取数据填充到 float[] 的内存中
-            // 现代 BinaryReader.Read(Span<byte>) 会处理循环读取，确保填满
             int bytesRead = reader.Read(byteView);
 
-            // 安全检查：确保读够了字节数
             if (bytesRead != byteView.Length)
             {
                 throw new EndOfStreamException($"Expected {byteView.Length} bytes but read {bytesRead} at LOD {i}");
@@ -91,20 +85,25 @@ public class MinMaxErrorMap
         return maps;
     }
 
-    public static MinMaxErrorMap[] CreateDefault(int leafNodeSize, int l0Width, int l0Height, int mipmaps)
+    public static MinMaxMap[] CreateDefault(int leafNodeSize, int l0Width, int l0Height, int lodCount)
     {
-        var maps = new MinMaxErrorMap[mipmaps];
+        var maps = new MinMaxMap[lodCount];
         int width = l0Width;
         int height = l0Height;
-        for (int mip = 0; mip < mipmaps; ++mip)
+        for (int mip = 0; mip < lodCount; ++mip)
         {
             int nodeSize = leafNodeSize << mip;
             int nodeCountX = (l0Width + nodeSize - 1) / nodeSize;
             int nodeCountY = (l0Height + nodeSize - 1) / nodeSize;
-            var map = new MinMaxErrorMap(nodeCountX, nodeCountY);
+            var map = new MinMaxMap(nodeCountX, nodeCountY);
             maps[mip] = map;
         }
         return maps;
+    }
+
+    internal static MinMaxMap[] CreateDefault(uint leafNodeSize, int geometricWidth, int geometricHeight, int maxLodCount)
+    {
+        throw new NotImplementedException();
     }
 
     //public static MinMaxErrorMap[] CreateMinMaxErrorMaps(HeightDataSource heightData, int baseChunkSize, int LODLevelCount)

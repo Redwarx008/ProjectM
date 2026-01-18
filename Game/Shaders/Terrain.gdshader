@@ -1,10 +1,6 @@
 shader_type spatial;
 render_mode depth_draw_always;
 
-uniform float u_heightScale;
-
-uniform uvec2 u_heightmapSize;
-
 uniform mat4 u_terrainInverseTransform;
 uniform mat3 u_inverseTransposedTransform;
 
@@ -24,11 +20,19 @@ uniform int u_HeightmapLodOffset;
 uniform sampler2DArray u_groundDiffuseArray : source_color;
 uniform sampler2DArray u_groundNormalArray ;
 
-uniform sampler2D u_debugGridTexture : source_color;
+uniform sampler2D u_DebugGridTexture : source_color;
 
-varying vec4 v_debugColor;
+uniform float u_HeightScale;
+uniform uvec2 u_HeightmapSize;
+uniform int u_GridDimension;
+uniform float u_SubdivisionDistance;
+uniform float u_MorphRange;
+uniform int u_LodCount;
+
+varying vec4 v_DebugColor;
 
 varying flat int v_RequestHeightMip;
+
 
 ivec2 PageTableSize(int mip)
 {
@@ -82,13 +86,13 @@ vec3 GetVirtualTextureUV(vec2 globalUv, int requestMip)
 float SampleHeightVT(vec2 globalUv, int requestMip)
 {
 	vec3 virtualTextureUV = GetVirtualTextureUV(globalUv, requestMip);
-	return textureLod(u_VTPhysicalHeightmap, virtualTextureUV, 0).r * u_heightScale;
+	return textureLod(u_VTPhysicalHeightmap, virtualTextureUV, 0).r * u_HeightScale;
 }
 
 vec3 CalculateNormalVT(vec2 uv, int requestMip)
 {
     // 计算采样步长 (1个像素)
-    vec2 texelSize = 1.0 / vec2(u_heightmapSize);
+    vec2 texelSize = 1.0 / vec2(u_HeightmapSize);
 
     // 使用 SampleHeightVT 替代 textureLod
     // 请求 Mip 0 以获得最精细的法线细节
@@ -117,41 +121,44 @@ vec4 DebugColor(vec2 globalUV, int requestMip)
 	}
 }
 
-float GetOriginHeight(vec2 worldSpacePosXZ, ivec2 lodDection, int mip)
-{
-	float h1 = SampleHeightVT(vec2(ivec2(worldSpacePosXZ) - lodDection) / vec2(u_heightmapSize), mip);
-	float h2 = SampleHeightVT(vec2(ivec2(worldSpacePosXZ) + lodDection) / vec2(u_heightmapSize), mip);
-	return (h1 + h2) * 0.5;
+float calculateMorphK(float viewDist, float currentLod) {
+    // 根据距离反算出当前的理论浮点 LOD
+    // 公式推导：dist = subdivision_dist * 2^target_lod
+    // => target_lod = log2(dist / subdivision_dist)
+    float targetLod = log2(viewDist / u_SubdivisionDistance);
+
+    // 我们在当前 lod 范围内，判断距离是否接近了开启 lod + 1 的临界点
+    // morph 发生在 [current_lod + (1.0 - range), current_lod + 1.0] 之间
+    float k = (targetLod - (currentLod + 1.0 - u_MorphRange)) / u_MorphRange;
+    return clamp(k, 0.0, 1.0);
 }
 
+// morphs input vertex uv from high to low detailed mesh position
+vec2 morphVertex(vec2 localPos, float morphLerpK)
+{
+	vec2 movePart = fract(localPos * float(u_GridDimension) * 0.5) * 2.0 / float(u_GridDimension);
+    return localPos - movePart * morphLerpK;
+}
 
 void vertex()
 {
-	ivec2 lodDirection = ivec2(UV);
-	int lodLevel = int(INSTANCE_CUSTOM.x);
-	float morphVal = clamp(INSTANCE_CUSTOM.y, 0.0, 1.0);
-	//ivec2 nodeXY = ivec2(int(INSTANCE_CUSTOM.z), int(INSTANCE_CUSTOM.w));
-	float chunkScale = float(1 << lodLevel);
-	VERTEX.xz *= chunkScale;
+	float lodLevel = INSTANCE_CUSTOM.x;
+	float gridScale = float(1 << int(lodLevel));
 
-	vec3 worldSpacePos = (MODEL_MATRIX * vec4(VERTEX, 1)).xyz;
+	vec3 worldPos = (MODEL_MATRIX * vec4(VERTEX * gridScale, 1)).xyz;
+	float viewerDist = distance(worldPos, CAMERA_POSITION_WORLD);
+	float morphK = calculateMorphK(viewerDist, lodLevel);
+	// 奇数点向偶数点吸附，使当前层形状对齐到 lodLevel + 1
+	vec2 morphedLocalPos = morphVertex(VERTEX.xz, morphK);
+
+	VERTEX.xz = morphedLocalPos * gridScale;
+
 	//Remove the extra vertices
-	worldSpacePos.xz = min(worldSpacePos.xz, vec2(u_heightmapSize) - vec2(1.0, 1.0));
-	//vec2 vertexCoord = (u_terrainInverseTransform * vec4(worldSpacePos, 1)).xz + vec2(0.5, 0.5);
-	vec2 vertexCoord = worldSpacePos.xz;
+	worldPos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	worldPos.xz = min(worldPos.xz, vec2(u_HeightmapSize) - vec2(1.0, 1.0));
+	UV = worldPos.xz / vec2(u_HeightmapSize);
 
-	vec2 uv = vertexCoord / vec2(u_heightmapSize);
-	UV = uv;
-
-	//v_debugColor = DebugColor(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
-	v_RequestHeightMip = max(lodLevel - u_HeightmapLodOffset, 0);
-	int lowResMip = clamp(lodLevel - u_HeightmapLodOffset + 1, 0, 7);
-	float height = SampleHeightVT(worldSpacePos.xz / vec2(u_heightmapSize), v_RequestHeightMip);
-	float lowResHeight = GetOriginHeight(worldSpacePos.xz, lodDirection * (1 << lodLevel), lowResMip);
-	height = mix(lowResHeight, height, morphVal);
-
-	worldSpacePos.y = height;
-	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldSpacePos, 1);
+	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldPos, 1);
 }
 
 void fragment()
@@ -162,6 +169,6 @@ void fragment()
 	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
 	vec3 virtualTextureUV = GetVirtualTextureUV(UV, 0);
 	//ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
-	ALBEDO = texture(u_debugGridTexture, UV * vec2(u_heightmapSize) / 128.0 * 16.0).rgb;
+	ALBEDO = texture(u_DebugGridTexture, UV * vec2(u_HeightmapSize) / 128.0 * 16.0).rgb;
 	//ALBEDO *= v_debugColor.rgb;
 }

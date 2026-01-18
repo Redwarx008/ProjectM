@@ -91,7 +91,7 @@ public class TerrainMesh : IDisposable
         Vector3[] vertices = new Vector3[verticesCount * verticesCount];
         int[] indices = new int[dimension * dimension * 6];
         Vector3[] normals = new Vector3[verticesCount * verticesCount];
-        Vector2[] directions = new Vector2[verticesCount * verticesCount];
+        //Vector2[] directions = new Vector2[verticesCount * verticesCount];
 
         int vertexCount = 0;
         for (int y = 0; y < verticesCount; y++)
@@ -99,7 +99,7 @@ public class TerrainMesh : IDisposable
             for (int x = 0; x < verticesCount; x++)
             {
                 vertices[vertexCount] = new Vector3(x * stride, 0, y * stride);
-                directions[vertexCount] = new Vector2(x % 2, y % 2);
+                //directions[vertexCount] = new Vector2(x % 2, y % 2);
                 normals[vertexCount] = new Vector3(0, 1, 0);
                 vertexCount++;
             }
@@ -125,7 +125,7 @@ public class TerrainMesh : IDisposable
         meshData[(int)Godot.Mesh.ArrayType.Vertex] = vertices;
         meshData[(int)Godot.Mesh.ArrayType.Index] = indices;
         meshData[(int)Godot.Mesh.ArrayType.Normal] = normals;
-        meshData[(int)Godot.Mesh.ArrayType.TexUV] = directions;
+        //meshData[(int)Godot.Mesh.ArrayType.TexUV] = directions;
 
         Godot.ArrayMesh mesh = new();
         mesh.AddSurfaceFromArrays(Godot.Mesh.PrimitiveType.Triangles, meshData);
