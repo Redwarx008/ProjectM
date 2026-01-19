@@ -12,20 +12,19 @@ using Logger = Core.Logger;
 public struct TerrainConfig()
 {
     public string? heightmapPath;
-    public string? splatmapPath; 
+    public string? splatmapPath;
     public string? minmaxmapPath;
     public uint patchSize = 16;
     public float width = 0f;
     public float length = 0f;
     public float height = 200f;
     public float morphRange = 0.2f;
-    public float subdivisionDistanceFactor = 2.0f;
 }
 
 [Tool]
 public partial class Terrain : Node3D
 {
-    public static readonly int MaxLodCount = 10;
+    public static readonly int MaxLodCount = 12;
 
     public static readonly uint MaxVTPageCount = 400;
 
@@ -73,7 +72,7 @@ public partial class Terrain : Node3D
             {
                 if (_mesh != null)
                 {
-                    Material.SetShaderParameter("u_MapSize", new Vector2(value, Length));
+                    Material.SetShaderParameter("u_MapSize", new Vector2(Length, value));
                 }
                 _width = value;
             }
@@ -91,7 +90,7 @@ public partial class Terrain : Node3D
             {
                 if (_mesh != null)
                 {
-                    Material.SetShaderParameter("u_MapSize", new Vector2(Width, value));
+                    Material.SetShaderParameter("u_MapSize", new Vector2(value, Width));
                 }
                 _length = value;
             }
@@ -118,29 +117,12 @@ public partial class Terrain : Node3D
 
     private float _height;
 
-    [Export]
-    public float MorphRange
-    {
-        get=> _morphRange;
-        set
-        {
-            if (_morphRange != value)
-            {
-                if (_mesh != null)
-                {
-                    Material.SetShaderParameter("u_MorphRange", value);
-                }
-                _morphRange = value;
-            }
-        }
-    }
-
     private float _morphRange;
 
     #endregion
 
     public float ViewRange { get; set; } = 1000f;
-
+    public float[] LodRanges { get; private set; } = new float[MaxLodCount];
 
     public override void _Notification(int what)
     {
@@ -153,7 +135,7 @@ public partial class Terrain : Node3D
             }
         }
 
-        if(what == NotificationLocalTransformChanged)
+        if (what == NotificationLocalTransformChanged)
         {
             Logger.Info("Position changed");
             Vector3 offset = Position;
@@ -203,9 +185,18 @@ public partial class Terrain : Node3D
         Width = config.width;
         Length = config.length;
         Height = config.height;
-        MorphRange = config.morphRange;
-        ViewRange = Math.Max(Width, Length) * 2;
+        _morphRange = config.morphRange;
         Data.Load(config);
+        if (Width == 0)
+        {
+            Width = Data.HeightmapDimY;
+        }
+        if (Length == 0)
+        {
+            Length = Data.HeightmapDimX;
+        }
+        ViewRange = Math.Max(Width, Length) * 2;
+        UpdateViewRange();
         CreateMesh();
         InitMaterialParameters();
         _processor = new TerrainProcessor(this, _mesh);
@@ -216,19 +207,19 @@ public partial class Terrain : Node3D
         Debug.Assert(Data.GeometricVT != null);
         GDTexture2D? pageTable = Data.GeometricVT.GetIndirectTexture();
         Debug.Assert(pageTable != null);
-        Material.SetShaderParameter("u_MapSize", new Vector2(Width, Length));
+        Material.SetShaderParameter("u_MapScale", new Vector4(Length / Data.HeightmapDimX, Height, Width / Data.HeightmapDimY, 1));
         Vector3 offset = Position;
-        Material.SetShaderParameter("u_MapOffset", new Vector2(offset.X, offset.Z));
-        Material.SetShaderParameter("u_HeightOffset", offset.Y);
-        Material.SetShaderParameter("u_Height", Height);
+        Material.SetShaderParameter("u_MapOffset", new Vector4(offset.X, offset.Y, offset.Z, 1));
         Material.SetShaderParameter("u_GridDimension", PatchSize);
-        Material.SetShaderParameter("u_MorphRange", MorphRange);
+        Span<Vector2> morphConsts = stackalloc Vector2[MaxLodCount];
+        CalculateMorphConsts(morphConsts);
+        Material.SetShaderParameter("u_MorphConsts", morphConsts);
         Material.SetShaderParameter("u_LodCount", Data.LodCount);
         Material.SetShaderParameter("u_PagePadding", Data.GeometricVT.Padding);
         Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
         Material.SetShaderParameter("u_VTPageTable", pageTable.ToTexture2d());
         Material.SetShaderParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
-        Material.SetShaderParameter("u_HeightmapSize",new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
+        Material.SetShaderParameter("u_HeightmapSize", new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
         Material.SetShaderParameter("u_VTPageTableSize", Data.GeometricVT.GetIndirectTextureSize());
     }
 
@@ -236,5 +227,51 @@ public partial class Terrain : Node3D
     {
         _mesh = TerrainMesh.CreatePlane(TerrainProcessor.MaxNodeInSelect, (int)PatchSize, PatchSize, GetWorld3D());
         _mesh.Material = Material;
+    }
+
+    private void UpdateViewRange()
+    {
+        //Initialize visible range per level.
+        float lodNear = 0;
+        float lodFar = ViewRange;
+        float detailBalance = 2;
+        int layerCount = Data.LodCount;
+        float currentDetailBalance = 1f;
+
+        Span<float> lODVisRangeDistRatios = stackalloc float[layerCount];
+        for (int i = 0; i < layerCount - 1; i++)
+        {
+            lODVisRangeDistRatios[i] = currentDetailBalance;
+            if (i == 0)
+            {
+                lODVisRangeDistRatios[i] = 0.9f;
+            }
+            currentDetailBalance *= detailBalance;
+        }
+
+        lODVisRangeDistRatios[layerCount - 1] = currentDetailBalance;
+        for (int i = 0; i < layerCount; i++)
+        {
+            lODVisRangeDistRatios[i] /= currentDetailBalance;
+        }
+
+        for (int i = 0; i < layerCount; i++)
+        {
+            LodRanges[i] = lodNear + lODVisRangeDistRatios[i] * (lodFar - lodNear);
+        }
+    }
+
+    private void CalculateMorphConsts(Span<Vector2> morphConsts)
+    {
+        float morphStartRatio = Math.Clamp(1.0f - _morphRange, 0, 1.0f);
+        float prevPos = 0;
+        for (int i = 0; i < morphConsts.Length; ++i)
+        {
+            float morphEnd = LodRanges[i];
+            float morphStart = prevPos + (morphEnd - prevPos) * morphStartRatio;
+            morphConsts[i].X = morphEnd / (morphEnd - morphStart);
+            morphConsts[i].Y = 1.0f / (morphEnd - morphStart);
+            prevPos = morphStart;
+        }
     }
 }

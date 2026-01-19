@@ -8,15 +8,13 @@ using System.Text;
 using System.Threading.Tasks;
 using IntersectType = MathExtension.IntersectType;
 
-public class TerrainQuadTree
+public class QuadTree
 {
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct NodeSelectedInfo
     {
         public uint x;
         public uint y;
-        public uint lodLevel;
-        public float morphValue;
+        public uint mip;
     }
 
     public ref struct SelectDesc
@@ -25,34 +23,28 @@ public class TerrainQuadTree
         public int nodeSelectedCount;
         public ReadOnlySpan<Plane> planes;
         public Vector3 viewerPos;
-        public float tolerableError;
         public float heightScale;
     }
 
-    private float _kFactor;
-
-    private int _topNodeCountX;
-
-    private int _topNodeCountY;
-
-    private int _topNodeSize;
+    public int TopNodeCountX { get; private set; }
+    public int TopNodeCountY { get; private set; }
+    public int TopNodeSize { get; private set; }
 
     private MinMaxMap[] _minMaxErrorMaps;
 
-    public TerrainQuadTree(int leafNodeSize, float kFactor, MinMaxMap[] minMaxErrorMaps)
+    public QuadTree(int leafNodeSize, MinMaxMap[] minMaxErrorMaps)
     {
-        _kFactor = kFactor;
-        _topNodeSize = leafNodeSize << (minMaxErrorMaps.Length - 1);
-        _topNodeCountX = (int)minMaxErrorMaps[minMaxErrorMaps.Length - 1].Width;
-        _topNodeCountY = (int)minMaxErrorMaps[minMaxErrorMaps.Length - 1].Height;
-        _minMaxErrorMaps = minMaxErrorMaps; 
+        TopNodeSize = leafNodeSize << (minMaxErrorMaps.Length - 1);
+        TopNodeCountX = (int)minMaxErrorMaps[minMaxErrorMaps.Length - 1].Width;
+        TopNodeCountY = (int)minMaxErrorMaps[minMaxErrorMaps.Length - 1].Height;
+        _minMaxErrorMaps = minMaxErrorMaps;
     }
 
     public void Select(ref SelectDesc selectDesc)
     {
-        for (int y = 0; y < _topNodeCountY; y++)
+        for (int y = 0; y < TopNodeCountY; y++)
         {
-            for (int x = 0; x < _topNodeCountX; x++)
+            for (int x = 0; x < TopNodeCountX; x++)
             {
                 int lodLevelCount = _minMaxErrorMaps.Length;
                 //NodeSelect(x * _topNodeSize, y * _topNodeSize, _topNodeSize, lodLevelCount - 1, false, ref selectDesc);

@@ -29,7 +29,7 @@ internal class TerrainProcessor : IDisposable
     private Rid _nodeSelectSet1AsPing;
     private Rid _nodeSelectSet1AsPong;
     private Rid _nodeSelectShader;
-    
+
     #endregion
 
     private int _lodCount;
@@ -40,8 +40,6 @@ internal class TerrainProcessor : IDisposable
 
     private TerrainMesh? _mesh;
 
-    private VirtualTexture? _geometricVT; // height or normal
-
     public bool Inited { get; private set; } = false;
 
     public static readonly int MaxNodeInSelect = 1000;
@@ -51,46 +49,49 @@ internal class TerrainProcessor : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     private struct PushConstants()
     {
-        public Vector4 FrustumPlane0 = Vector4.Zero;
-        public Vector4 FrustumPlane1 = Vector4.Zero;
-        public Vector4 FrustumPlane2 = Vector4.Zero;
-        public Vector4 FrustumPlane3 = Vector4.Zero;
-        public Vector4 FrustumPlane4 = Vector4.Zero;
-        public Vector4 FrustumPlane5 = Vector4.Zero;
-        public Vector4 CameraPosition = Vector4.Zero;
-        public int LodLevel = 0;
-        public int LodCount = 0;
-        public float SubdivisionDistance = 0f;
+        public Vector4 frustumPlane0 = Vector4.Zero;
+        public Vector4 frustumPlane1 = Vector4.Zero;
+        public Vector4 frustumPlane2 = Vector4.Zero;
+        public Vector4 frustumPlane3 = Vector4.Zero;
+        public Vector4 frustumPlane4 = Vector4.Zero;
+        public Vector4 frustumPlane5 = Vector4.Zero;
+        public Vector4 cameraPosition = Vector4.Zero;
+        public int lodLevel = 0;
+        public float lodRange = 0;
+        public float nextLodRange = 0f;
         private int _padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     private struct TerrainParams
     {
-        public uint heightmapSizeX;
-        public uint heightmapSizeY;
-        public float mapSizeX;
-        public float mapSizeY;
-        public float mapOffsetX;
-        public float mapOffsetY;
+        public Vector2I heightmapSize;
+        public Vector2 mapSize;
+        public Vector2 mapOffset;
         public float height;
         public float heightOffset;
         public uint patchSize;
-        private uint padding;
+        private uint padding0;
+        private uint padding1;
+        private uint padding2;
     }
 
     #endregion
 
     private PushConstants _pushConstants;
 
-    private float[] _lodRanges;
+
+
+    private int _topNodeX;
+    private int _topNodeY;
 
     public TerrainProcessor(Terrain terrain, TerrainMesh? mesh)
     {
         _terrain = terrain;
         _mesh = mesh;
-        _geometricVT = terrain.Data.GeometricVT;
-        CalcLodParameters(terrain.Data.HeightmapDimX, terrain.Data.HeightmapDimY, (int)terrain.PatchSize);
+        _lodCount = _terrain.Data.LodCount;
+        _topNodeX = _terrain.Data.QuadTree!.TopNodeCountX;
+        _topNodeY = _terrain.Data.QuadTree!.TopNodeCountY;
         _dispatchCallable = Callable.From(Dispatch);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
@@ -103,12 +104,12 @@ internal class TerrainProcessor : IDisposable
     {
         // todo: 自己计算Frustum避免堆分配造成GC压力
         UpdateFrustumAndCamera(camera);
-        _pushConstants.LodCount = _lodCount;
         RenderingServer.CallOnRenderThread(_dispatchCallable);
     }
 
     private void Dispatch()
     {
+        Debug.Assert(_terrain != null);
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
         {
@@ -125,8 +126,9 @@ internal class TerrainProcessor : IDisposable
         ReadOnlySpan<Rid> set1S = [_nodeSelectSet1AsPing, _nodeSelectSet1AsPong];
         for (int i = 0; i < _lodCount; ++i)
         {
-            _pushConstants.LodLevel = _lodCount - i - 1;
-
+            _pushConstants.lodLevel = _lodCount - i - 1;
+            _pushConstants.lodRange = _terrain.LodRanges[_pushConstants.lodLevel];
+            _pushConstants.nextLodRange = _terrain.LodRanges[Math.Max(_pushConstants.lodLevel - 1, 0)];
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _nodeSelectPipeline);
             rd.ComputeListBindUniformSet(computeList, _nodeSelectSet0, 0);
@@ -138,7 +140,7 @@ internal class TerrainProcessor : IDisposable
             rd.ComputeListEnd();
 
             rd.BufferCopy(appendList, _dispatchIndirectBuffer, 0, 0, sizeof(uint));
-
+            rd.BufferClear(consumeList, 0, 4);
             (consumeList, appendList) = (appendList, consumeList);
         }
     }
@@ -146,61 +148,18 @@ internal class TerrainProcessor : IDisposable
     private void UpdateFrustumAndCamera(Camera3D camera)
     {
         var frustumPlanes = camera.GetFrustum().ToArray();
-        _pushConstants.FrustumPlane0 = frustumPlanes[0].ToVector4();
-        _pushConstants.FrustumPlane1 = frustumPlanes[1].ToVector4();
-        _pushConstants.FrustumPlane2 = frustumPlanes[2].ToVector4();
-        _pushConstants.FrustumPlane3 = frustumPlanes[3].ToVector4();
-        _pushConstants.FrustumPlane4 = frustumPlanes[4].ToVector4();
-        _pushConstants.FrustumPlane5 = frustumPlanes[5].ToVector4();
+        _pushConstants.frustumPlane0 = frustumPlanes[0].ToVector4();
+        _pushConstants.frustumPlane1 = frustumPlanes[1].ToVector4();
+        _pushConstants.frustumPlane2 = frustumPlanes[2].ToVector4();
+        _pushConstants.frustumPlane3 = frustumPlanes[3].ToVector4();
+        _pushConstants.frustumPlane4 = frustumPlanes[4].ToVector4();
+        _pushConstants.frustumPlane5 = frustumPlanes[5].ToVector4();
         Vector3 position = camera.GlobalPosition;
-        _pushConstants.CameraPosition = new Vector4(position.X, position.Y, position.Z, 1);
-    }
-
-    private void CalcLodParameters(int mapRasterSizeX, int mapRasterSizeY, int leafNodeSize)
-    {
-        int minLength = Math.Min(mapRasterSizeX, mapRasterSizeY);
-        int topNodeSize = (int)(leafNodeSize * (int)Math.Pow(2, _lodCount - 1));
-        _topNodeX = (int)Math.Ceiling(mapRasterSizeX / (float)topNodeSize);
-        _topNodeY = (int)Math.Ceiling(mapRasterSizeY / (float)topNodeSize);
-        _leafNodeX = (int)MathF.Ceiling((mapRasterSizeX - 1) / (float)leafNodeSize);
-        _leafNodeY = (int)MathF.Ceiling((mapRasterSizeY - 1) / (float)leafNodeSize);
-    }
-
-    private void CalculateViewRange(Span<float> viewRangePerLevel)
-    {
-        Debug.Assert(_terrain != null);
-        //Initialize visible range per level.
-        float lodNear = 0;
-        float lodFar = _terrain.ViewRange;
-        float detailBalance = 2;
-        int layerCount = _lodCount;
-        float currentDetailBalance = 1f;
-
-        Span<float> lODVisRangeDistRatios = stackalloc float[layerCount];
-        for (int i = 0; i < layerCount - 1; i++)
-        {
-            lODVisRangeDistRatios[i] = currentDetailBalance;
-            if (i == 0)
-            {
-                lODVisRangeDistRatios[i] = 0.9f;
-            }
-            currentDetailBalance *= detailBalance;
-        }
-
-        lODVisRangeDistRatios[layerCount - 1] = currentDetailBalance;
-        for (int i = 0; i < layerCount; i++)
-        {
-            lODVisRangeDistRatios[i] /= currentDetailBalance;
-        }
-        viewRangePerLevel = new float[layerCount];
-        for (int i = 0; i < layerCount; i++)
-        {
-            viewRangePerLevel[i] = lodNear + lODVisRangeDistRatios[i] * (lodFar - lodNear);
-        }
+        _pushConstants.cameraPosition = new Vector4(position.X, position.Y, position.Z, 1);
     }
 
     private void InitPipeline(Terrain terrain)
-    {   
+    {
         Debug.Assert(_mesh != null);
         Debug.Assert(terrain.Data.MinMaxMaps != null);
 
@@ -236,12 +195,15 @@ internal class TerrainProcessor : IDisposable
             _topNodeList = GDBuffer.CreateStorage((uint)bytes.Length, bytes);
         }
 
+        Vector3 offset = terrain.Position;
         var terrainParams = new TerrainParams()
         {
+            heightmapSize = new Vector2I(terrain.Data.HeightmapDimX, terrain.Data.HeightmapDimY),
+            mapSize = new Vector2(terrain.Length, terrain.Width),
+            mapOffset = new Vector2(offset.X, offset.Z),
+            height = terrain.Height,
+            heightOffset = offset.Y,
             patchSize = terrain.PatchSize,
-            heightmapSizeX = (uint)terrain.Data.HeightmapDimX,
-            heightmapSizeY = (uint)terrain.Data.HeightmapDimY,
-            height = terrain.Height
         };
 
         {

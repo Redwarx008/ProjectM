@@ -22,11 +22,11 @@ uniform sampler2DArray u_groundNormalArray ;
 
 uniform sampler2D u_DebugGridTexture : source_color;
 
-uniform float u_HeightScale;
+uniform vec2 u_MorphConsts[12];
+uniform vec4 u_MapOffset;
+uniform vec4 u_MapScale;
 uniform uvec2 u_HeightmapSize;
 uniform int u_GridDimension;
-uniform float u_SubdivisionDistance;
-uniform float u_MorphRange;
 uniform int u_LodCount;
 
 varying vec4 v_DebugColor;
@@ -86,7 +86,7 @@ vec3 GetVirtualTextureUV(vec2 globalUv, int requestMip)
 float SampleHeightVT(vec2 globalUv, int requestMip)
 {
 	vec3 virtualTextureUV = GetVirtualTextureUV(globalUv, requestMip);
-	return textureLod(u_VTPhysicalHeightmap, virtualTextureUV, 0).r * u_HeightScale;
+	return textureLod(u_VTPhysicalHeightmap, virtualTextureUV, 0).r * u_MapScale.y;
 }
 
 vec3 CalculateNormalVT(vec2 uv, int requestMip)
@@ -121,42 +121,28 @@ vec4 DebugColor(vec2 globalUV, int requestMip)
 	}
 }
 
-float calculateMorphK(float viewDist, float currentLod) {
-    // 根据距离反算出当前的理论浮点 LOD
-    // 公式推导：dist = subdivision_dist * 2^target_lod
-    // => target_lod = log2(dist / subdivision_dist)
-    float targetLod = log2(viewDist / u_SubdivisionDistance);
-
-    // 我们在当前 lod 范围内，判断距离是否接近了开启 lod + 1 的临界点
-    // morph 发生在 [current_lod + (1.0 - range), current_lod + 1.0] 之间
-    float k = (targetLod - (currentLod + 1.0 - u_MorphRange)) / u_MorphRange;
-    return clamp(k, 0.0, 1.0);
-}
 
 // morphs input vertex uv from high to low detailed mesh position
-vec2 morphVertex(vec2 localPos, float morphLerpK)
+vec2 morphVertex(vec2 localPos, vec2 globalPos, float morphLerpK, float gridScale)
 {
-	vec2 movePart = fract(localPos * float(u_GridDimension) * 0.5) * 2.0 / float(u_GridDimension);
-    return localPos - movePart * morphLerpK;
+	vec2 movePart = fract(localPos *  0.5) * 2.0 / float(u_GridDimension);
+    return globalPos - movePart * u_MapScale.xz * gridScale * morphLerpK;
 }
 
 void vertex()
 {
-	float lodLevel = INSTANCE_CUSTOM.x;
-	float gridScale = float(1 << int(lodLevel));
+	int lodLevel = int(INSTANCE_CUSTOM.x);
+	float gridScale = float(1 << lodLevel);
 
-	vec3 worldPos = (MODEL_MATRIX * vec4(VERTEX * gridScale, 1)).xyz;
+	vec3 worldPos = (MODEL_MATRIX * vec4(VERTEX * gridScale * u_MapScale.xyz, 1)).xyz + u_MapOffset.xyz;
 	float viewerDist = distance(worldPos, CAMERA_POSITION_WORLD);
-	float morphK = calculateMorphK(viewerDist, lodLevel);
-	// 奇数点向偶数点吸附，使当前层形状对齐到 lodLevel + 1
-	vec2 morphedLocalPos = morphVertex(VERTEX.xz, morphK);
-
-	VERTEX.xz = morphedLocalPos * gridScale;
+	float morphLerpK  = 1.0f - clamp( u_MorphConsts[lodLevel].x - viewerDist *  u_MorphConsts[lodLevel].y, 0.0, 1.0 );
+	worldPos.xz = morphVertex(VERTEX.xz, worldPos.xz, morphLerpK, gridScale);
 
 	//Remove the extra vertices
-	worldPos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	worldPos.xz = min(worldPos.xz, vec2(u_HeightmapSize) - vec2(1.0, 1.0));
-	UV = worldPos.xz / vec2(u_HeightmapSize);
+	vec2 mapSize = vec2(u_HeightmapSize - 1u) * u_MapScale.xz + u_MapOffset.xz;
+	worldPos.xz = min(worldPos.xz, mapSize);
+	UV = (worldPos.xz - u_MapOffset.xz) / mapSize;
 
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldPos, 1);
 }

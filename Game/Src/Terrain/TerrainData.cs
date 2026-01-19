@@ -1,4 +1,3 @@
-
 using Core;
 using Godot;
 using ProjectM;
@@ -17,6 +16,8 @@ public class TerrainData : IDisposable
 
     public GDTexture2D[]? MinMaxMaps { get; private set; }
 
+    internal QuadTree? QuadTree { get; private set; }
+
     public int HeightmapDimX { get; private set; }
     public int HeightmapDimY { get; private set; }
     public int HeightmapLodOffset { get; private set; }
@@ -24,7 +25,7 @@ public class TerrainData : IDisposable
     {
         get
         {
-            if(MinMaxMaps != null)
+            if (MinMaxMaps != null)
             {
                 return MinMaxMaps.Length;
             }
@@ -46,13 +47,14 @@ public class TerrainData : IDisposable
     {
         LoadHeightMapVT(config.heightmapPath);
         MinMaxMap[] data = LoadMinMaxMapsData(config.minmaxmapPath);
+        QuadTree = new QuadTree(GeometricVT!.TileSize, data[HeightmapLodOffset..]);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             LoadTextures();
             CreateMinMaxMapTexture(data);
         }));
     }
-    
+
     public void Dispose()
     {
         RenderingServer.CallOnRenderThread(Callable.From(() =>
@@ -71,7 +73,7 @@ public class TerrainData : IDisposable
     {
         Debug.Assert(MinMaxMaps != null);
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
-        for(int i = 0; i < MinMaxMaps.Length; ++i)
+        for (int i = 0; i < MinMaxMaps.Length; ++i)
         {
             var desc = new GDTextureDesc()
             {
