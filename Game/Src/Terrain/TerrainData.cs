@@ -10,13 +10,13 @@ using Logger = Core.Logger;
 
 public class TerrainData : IDisposable
 {
-    public VirtualTexture? GeometricVT { get; private set; } // height or normal
+    public VirtualTexture? MapVT { get; private set; } // height or normal
 
     public Texture2D? DebugGridTexture { get; private set; }
 
     public GDTexture2D[]? MinMaxMaps { get; private set; }
 
-    internal QuadTree? QuadTree { get; private set; }
+    internal QuadTree? StreamingQuadTree { get; private set; }
 
     public int HeightmapDimX { get; private set; }
     public int HeightmapDimY { get; private set; }
@@ -47,7 +47,8 @@ public class TerrainData : IDisposable
     {
         LoadHeightMapVT(config.heightmapPath);
         MinMaxMap[] data = LoadMinMaxMapsData(config.minmaxmapPath);
-        QuadTree = new QuadTree(GeometricVT!.TileSize, data[HeightmapLodOffset..]);
+        StreamingQuadTree = new QuadTree(data[HeightmapLodOffset..], MapVT!.TileSize, 
+            HeightmapDimX, HeightmapDimY, HeightmapLodOffset);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             LoadTextures();
@@ -59,7 +60,7 @@ public class TerrainData : IDisposable
     {
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            GeometricVT?.Dispose();
+            MapVT?.Dispose();
         }));
     }
 
@@ -113,14 +114,14 @@ public class TerrainData : IDisposable
         {
             new VirtualTextureDesc()
             {
-                format = RenderingDevice.DataFormat.R16Unorm,
+                format = RenderingDevice.DataFormat.R8G8B8A8Unorm,
                 filePath = file
             }
         };
-        GeometricVT = new VirtualTexture(Terrain.MaxVTPageCount, descs);
-        HeightmapDimX = GeometricVT.Width;
-        HeightmapDimY = GeometricVT.Height;
-        CalcHeightmapLodOffsetToMip(GeometricVT.TileSize, (int)_terrain.PatchSize);
+        MapVT = new VirtualTexture(Terrain.MaxVTPageCount, descs);
+        HeightmapDimX = MapVT.Width;
+        HeightmapDimY = MapVT.Height;
+        CalcHeightmapLodOffsetToMip(MapVT.TileSize, (int)_terrain.PatchSize);
     }
 
     private void CalcHeightmapLodOffsetToMip(int pageSize, int leafNodeSize)

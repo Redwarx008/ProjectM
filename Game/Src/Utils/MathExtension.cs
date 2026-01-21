@@ -79,28 +79,33 @@ public static class MathExtension
         return new Vector4(plane.X, plane.Y, plane.Z, -plane.D);
     }
 
+    public static Vector3 ToVector3(this Vector4 vec4)
+    {
+        return new Vector3(vec4.X, vec4.Y, vec4.Z);
+    }
+
     public enum IntersectType
     {
         Inside,
         Outside,
         Intersect
     }
-    public static IntersectType FrustumCullAABB(Vector3 boundsMin, Vector3 boundsMax, ReadOnlySpan<Plane> frustumPlanes)
+    public static IntersectType FrustumCullAABB(Vector3 boundsMin, Vector3 boundsMax, ReadOnlySpan<Vector4> frustumPlanes)
     {
         Vector3 center = (boundsMin + boundsMax) * 0.5f;
         Vector3 extents = boundsMax - center;
         //extents = new Vector3(Math.Abs(extents.X), Math.Abs(extents.Y), Math.Abs(extents.Z));
         bool isFullyInside = true;
 
-        foreach (Plane plane in frustumPlanes)
+        foreach (Vector4 plane in frustumPlanes)
         {
             // 计算AABB在平面法线方向上的投影半径
             float radius = extents.X * Math.Abs(plane.X) +
                           extents.Y * Math.Abs(plane.Y) +
                           extents.Z * Math.Abs(plane.Z);
-            // godot的frustum plane 法线指向视锥体外, 在这里反转法线向量
-            Vector3 normal = -plane.Normal;
-            float distance = normal.Dot(center) + plane.D;
+            //// godot的frustum plane 法线指向视锥体外, 在这里反转法线向量
+            Vector3 normal = new(plane.X, plane.Y, plane.Z);
+            float distance = normal.Dot(center) + plane.W;
 
             // 完全在平面负半空间
             if (distance < -radius)

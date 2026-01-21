@@ -51,7 +51,7 @@ layout_mode = 0
 offset_top = 45.0
 offset_right = 86.0
 offset_bottom = 68.0
-text = " FPS: 145"
+text = " FPS: 120"
 
 [node name="CameraPosLabel" type="Label" parent="Control/Panel" unique_id=786647067]
 layout_mode = 1

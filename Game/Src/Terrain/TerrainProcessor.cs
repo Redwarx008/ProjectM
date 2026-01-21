@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
+using static QuadTree;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 internal class TerrainProcessor : IDisposable
@@ -90,8 +91,8 @@ internal class TerrainProcessor : IDisposable
         _terrain = terrain;
         _mesh = mesh;
         _lodCount = _terrain.Data.LodCount;
-        _topNodeX = _terrain.Data.QuadTree!.TopNodeCountX;
-        _topNodeY = _terrain.Data.QuadTree!.TopNodeCountY;
+        _topNodeX = _terrain.Data.StreamingQuadTree!.TopNodeCountX;
+        _topNodeY = _terrain.Data.StreamingQuadTree!.TopNodeCountY;
         _dispatchCallable = Callable.From(Dispatch);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
@@ -104,12 +105,12 @@ internal class TerrainProcessor : IDisposable
     {
         // todo: 自己计算Frustum避免堆分配造成GC压力
         UpdateFrustumAndCamera(camera);
+        UpdateStreamingData();
         RenderingServer.CallOnRenderThread(_dispatchCallable);
     }
 
     private void Dispatch()
     {
-        Debug.Assert(_terrain != null);
         RenderingDevice rd = RenderingServer.GetRenderingDevice();
 
         {
@@ -127,7 +128,7 @@ internal class TerrainProcessor : IDisposable
         for (int i = 0; i < _lodCount; ++i)
         {
             _pushConstants.lodLevel = _lodCount - i - 1;
-            _pushConstants.lodRange = _terrain.LodRanges[_pushConstants.lodLevel];
+            _pushConstants.lodRange = _terrain!.LodRanges[_pushConstants.lodLevel];
             _pushConstants.nextLodRange = _terrain.LodRanges[Math.Max(_pushConstants.lodLevel - 1, 0)];
             var computeList = rd.ComputeListBegin();
             rd.ComputeListBindComputePipeline(computeList, _nodeSelectPipeline);
@@ -156,6 +157,38 @@ internal class TerrainProcessor : IDisposable
         _pushConstants.frustumPlane5 = frustumPlanes[5].ToVector4();
         Vector3 position = camera.GlobalPosition;
         _pushConstants.cameraPosition = new Vector4(position.X, position.Y, position.Z, 1);
+    }
+
+    private void UpdateStreamingData()
+    {
+        Debug.Assert(_terrain!.Data.StreamingQuadTree != null);
+        Debug.Assert(_terrain.Data.MapVT != null);
+
+        ReadOnlySpan<Vector4> frustumPlanes = MemoryMarshal.CreateReadOnlySpan(ref _pushConstants.frustumPlane0, 6);
+        Span<QuadTree.Node> selections = stackalloc QuadTree.Node[200];
+        var selectDesc = new QuadTree.SelectDesc()
+        {
+            planes = frustumPlanes,
+            selections = selections,
+            selectionCount = 0,
+            viewerPos = _pushConstants.cameraPosition.ToVector3(),
+            lodRanges = _terrain.LodRanges,
+            mapSize = new Vector3(_terrain.Length, _terrain.Height, _terrain.Width),
+            mapOffset = _terrain.Offset
+        };
+        _terrain.Data.StreamingQuadTree.Select(ref  selectDesc);
+
+        for(int i = 0; i < selectDesc.selectionCount; ++i)
+        {
+            _terrain.Data.MapVT.RequestPage(new VirtualPageID()
+            {
+                x = (int)selectDesc.selections[i].x,
+                y = (int)selectDesc.selections[i].y,
+                mip = (int)selectDesc.selections[i].mip,
+            });
+        }
+
+        _terrain.Data.MapVT.Update();
     }
 
     private void InitPipeline(Terrain terrain)
@@ -298,17 +331,6 @@ internal class TerrainProcessor : IDisposable
     }
 
     #region Process Virtual Texture
-
-    //private void UpdateVirtualTexture(NodeSelectedInfo[] nodeSelectedList, int nodeSelectedCount)
-    //{
-    //    Debug.Assert(_geometricVT != null);
-    //    for (int i = 0; i < nodeSelectedCount; ++i)
-    //    {
-    //        var nodeInfo = nodeSelectedList[i];
-    //        RequestPageForNode((int)nodeInfo.lodLevel, (int)nodeInfo.x, (int)nodeInfo.y);
-    //    }
-    //    _geometricVT.Update();
-    //}
 
     //private void RequestPageForNode(int lod, int nodeX, int nodeY)
     //{

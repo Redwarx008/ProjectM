@@ -125,7 +125,7 @@ vec4 DebugColor(vec2 globalUV, int requestMip)
 // morphs input vertex uv from high to low detailed mesh position
 vec2 morphVertex(vec2 localPos, vec2 globalPos, float morphLerpK, float gridScale)
 {
-	vec2 movePart = fract(localPos *  0.5) * 2.0 / float(u_GridDimension);
+	vec2 movePart = fract(localPos *  0.5) * 2.0;
     return globalPos - movePart * u_MapScale.xz * gridScale * morphLerpK;
 }
 
@@ -150,11 +150,11 @@ void vertex()
 void fragment()
 {
 	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
-	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, 0);
-	worldNormal = normalize(worldNormal);
-	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
+	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, 0);
+	//worldNormal = normalize(worldNormal);
+	//NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
 	vec3 virtualTextureUV = GetVirtualTextureUV(UV, 0);
-	//ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
-	ALBEDO = texture(u_DebugGridTexture, UV * vec2(u_HeightmapSize) / 128.0 * 16.0).rgb;
+	ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
+	//ALBEDO = texture(u_DebugGridTexture, UV * vec2(u_HeightmapSize) / 128.0 * 16.0).rgb;
 	//ALBEDO *= v_debugColor.rgb;
 }

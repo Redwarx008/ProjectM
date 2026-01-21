@@ -117,6 +117,24 @@ public partial class Terrain : Node3D
 
     private float _height;
 
+    public Vector3 Offset
+    {
+        get => _offset;
+        set
+        {
+            if (_offset != value)
+            {
+                _offset = value;
+                if (_mesh != null)
+                {
+                    Material.SetShaderParameter("u_MapOffset", new Vector2(_offset.X, _offset.Z));
+                    Material.SetShaderParameter("u_HeightOffset", _offset.Y);
+                }
+            }
+        }
+    }
+    private Vector3 _offset;
+
     private float _morphRange;
 
     #endregion
@@ -138,9 +156,7 @@ public partial class Terrain : Node3D
         if (what == NotificationLocalTransformChanged)
         {
             Logger.Info("Position changed");
-            Vector3 offset = Position;
-            Material.SetShaderParameter("u_MapOffset", new Vector2(offset.X, offset.Z));
-            Material.SetShaderParameter("u_HeightOffset", offset.Y);
+            Offset = Position;
         }
     }
 
@@ -204,8 +220,8 @@ public partial class Terrain : Node3D
 
     private void InitMaterialParameters()
     {
-        Debug.Assert(Data.GeometricVT != null);
-        GDTexture2D? pageTable = Data.GeometricVT.GetIndirectTexture();
+        Debug.Assert(Data.MapVT != null);
+        GDTexture2D? pageTable = Data.MapVT.GetIndirectTexture();
         Debug.Assert(pageTable != null);
         Material.SetShaderParameter("u_MapScale", new Vector4(Length / Data.HeightmapDimX, Height, Width / Data.HeightmapDimY, 1));
         Vector3 offset = Position;
@@ -215,12 +231,12 @@ public partial class Terrain : Node3D
         CalculateMorphConsts(morphConsts);
         Material.SetShaderParameter("u_MorphConsts", morphConsts);
         Material.SetShaderParameter("u_LodCount", Data.LodCount);
-        Material.SetShaderParameter("u_PagePadding", Data.GeometricVT.Padding);
-        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.GeometricVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
+        Material.SetShaderParameter("u_PagePadding", Data.MapVT.Padding);
+        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.MapVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
         Material.SetShaderParameter("u_VTPageTable", pageTable.ToTexture2d());
         Material.SetShaderParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
-        Material.SetShaderParameter("u_HeightmapSize", new Vector2I(Data.GeometricVT.Width, Data.GeometricVT.Height));
-        Material.SetShaderParameter("u_VTPageTableSize", Data.GeometricVT.GetIndirectTextureSize());
+        Material.SetShaderParameter("u_HeightmapSize", new Vector2I(Data.MapVT.Width, Data.MapVT.Height));
+        Material.SetShaderParameter("u_VTPageTableSize", Data.MapVT.GetIndirectTextureSize());
     }
 
     private void CreateMesh()
