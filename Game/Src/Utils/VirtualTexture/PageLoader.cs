@@ -16,12 +16,12 @@ internal class PageLoader : IDisposable
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct VTHeader
     {
-        public int Width;
-        public int Height;
-        public int TileSize;    // T (不含 Padding 的大小)
-        public int Padding;     // P
-        public int BytesPerPixel;
-        public int Mipmaps;
+        public int width;
+        public int height;
+        public int tileSize;    // T (不含 Padding 的大小)
+        public int padding;     // P
+        public int bytesPerPixel;
+        public int mipmaps;
     }
 
     private readonly SafeFileHandle _fileHandle; 
@@ -50,7 +50,7 @@ internal class PageLoader : IDisposable
 
     private PageBufferAllocator _bufferAllocator;
 
-    public PageLoader(string filePath, int maxPageLoadedCount)
+    public PageLoader(string filePath)
     {
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"VT file not found: {filePath}");
@@ -70,25 +70,25 @@ internal class PageLoader : IDisposable
         RandomAccess.Read(_fileHandle, byteView, 0);
 
         // 2. 准备预计算数据
-        _mipLevelFileOffsets = new long[Header.Mipmaps];
-        _mipLevelTilesX = new int[Header.Mipmaps];
+        _mipLevelFileOffsets = new long[Header.mipmaps];
+        _mipLevelTilesX = new int[Header.mipmaps];
 
-        _paddedSize = Header.TileSize + Header.Padding * 2;
-        _bytesPerTile = _paddedSize * _paddedSize * Header.BytesPerPixel;
+        _paddedSize = Header.tileSize + Header.padding * 2;
+        _bytesPerTile = _paddedSize * _paddedSize * Header.bytesPerPixel;
 
         // 3. 模拟写入过程，计算偏移量
         long currentOffset = headerSize; // 从 Header 之后开始
 
-        int currentW = Header.Width;
-        int currentH = Header.Height;
+        int currentW = Header.width;
+        int currentH = Header.height;
 
-        for (int level = 0; level < Header.Mipmaps; level++)
+        for (int level = 0; level < Header.mipmaps; level++)
         {
             _mipLevelFileOffsets[level] = currentOffset;
 
             // 计算当前层级的图块数量 (逻辑必须与 VTProcessor 完全一致)
-            int nTilesX = (int)Math.Ceiling(currentW / (float)Header.TileSize);
-            int nTilesY = (int)Math.Ceiling(currentH / (float)Header.TileSize);
+            int nTilesX = (int)Math.Ceiling(currentW / (float)Header.tileSize);
+            int nTilesY = (int)Math.Ceiling(currentH / (float)Header.tileSize);
 
             _mipLevelTilesX[level] = nTilesX;
 
@@ -97,7 +97,7 @@ internal class PageLoader : IDisposable
             currentOffset += levelSize;
 
             // 计算下一级 Mip 的尺寸
-            if (level < Header.Mipmaps - 1)
+            if (level < Header.mipmaps - 1)
             {
                 currentW = Math.Max(1, (int)Math.Ceiling(currentW * 0.5));
                 currentH = Math.Max(1, (int)Math.Ceiling(currentH * 0.5));
@@ -118,7 +118,7 @@ internal class PageLoader : IDisposable
         Debug.Assert(_mipLevelTilesX != null);
         Debug.Assert(_mipLevelFileOffsets != null);
         // 1. 基础校验
-        if (mip < 0 || mip >= Header.Mipmaps) return null;
+        if (mip < 0 || mip >= Header.mipmaps) return null;
         if (x < 0 || x >= _mipLevelTilesX[mip]) return null;
 
         // Y 轴校验需要重新计算该层的 TilesY，或者仅仅依赖文件长度保护

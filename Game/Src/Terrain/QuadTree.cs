@@ -76,13 +76,13 @@ public class QuadTree
         var boundsMin = new Vector3()
         {
             X = selectDesc.mapOffset.X + x * mapScale.X,
-            Y = selectDesc.mapOffset.Y + minZ / ushort.MaxValue * mapScale.Y,
+            Y = selectDesc.mapOffset.Y + (float)minZ / ushort.MaxValue * mapScale.Y,
             Z = selectDesc.mapOffset.Z + y * mapScale.Z
         };
         var boundsMax = new Vector3()
         {
             X = selectDesc.mapOffset.X + (x + size) * mapScale.X,
-            Y = selectDesc.mapOffset.Y + maxZ / ushort.MaxValue * mapScale.Y,
+            Y = selectDesc.mapOffset.Y + (float)maxZ / ushort.MaxValue * mapScale.Y,
             Z = selectDesc.mapOffset.Z + (y + size) * mapScale.Z
         };
         IntersectType cullResult = parentCompletelyInFrustum ? IntersectType.Inside :

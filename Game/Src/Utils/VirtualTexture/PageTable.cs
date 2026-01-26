@@ -174,7 +174,9 @@ internal unsafe class PageTable : IDisposable
 
     public static int CMaxPageTableSize = 2048;
 
-    public PageTable(int l0Width, int l0Height, int tileSize, int mipCount)
+    public Action<VirtualPageID> PageUnmapped;
+
+    public PageTable(PageCache pageCache, int l0Width, int l0Height, int tileSize, int mipCount)
     {
         _textureViewPerMip = new Rid[mipCount];
         _setArrayPool = new SortedSetArrayPool(mipCount, new PageUpdateInfoComparer());
@@ -182,6 +184,8 @@ internal unsafe class PageTable : IDisposable
         _activeRemapSets = _setArrayPool.Rent();
         _persistentMip = mipCount - 1;
         _mipRealBounds = new (int w, int h)[mipCount];
+        pageCache.AddPage += MapPage;
+        pageCache.RemovePage += UnmapPage;
         CalculateLayout(l0Width, l0Height, tileSize);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
@@ -304,18 +308,25 @@ internal unsafe class PageTable : IDisposable
         public int mip;
         public uint morton;
     }
-    public void RemapPage(VirtualPageID id, Action<VirtualPageID> removePageMethod)
+    public void UnmapPage(VirtualPageID id)
     {
         Debug.Assert(IsValid(id.mip, id.x, id.y));
         int fallbackSlot = -1;
         int fallbackMip = -1;
 
-        VirtualPageID ancestor = MapToAncestor(id, _persistentMip);
-        uint persistentMorton = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
-        PageEntry* fallbackEntry = _mipBasePages[_persistentMip] + persistentMorton;
-        Debug.Assert(fallbackEntry->mappingSlot != -1 && fallbackEntry->activeMip == _persistentMip);
-        fallbackSlot = fallbackEntry->mappingSlot;
-        fallbackMip = fallbackEntry->activeMip;
+        for (int m = id.mip + 1; m <= _persistentMip; m++)
+        {
+            VirtualPageID ancestor = MapToAncestor(id, m);
+            uint idxInMip = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
+            PageEntry* entry = _mipBasePages[m] + idxInMip;
+            if (entry->activeMip == m && entry->mappingSlot != -1)
+            {
+                fallbackSlot = entry->mappingSlot;
+                fallbackMip = entry->activeMip;
+                break;
+            }
+        }
+        Debug.Assert(fallbackSlot != -1 && fallbackMip != -1);
 
         uint rootMorton = MathExtension.EncodeMorton(id.x, id.y);
 
@@ -401,7 +412,7 @@ internal unsafe class PageTable : IDisposable
             };
             entry->mappingSlot = (short)fallbackSlot;
             entry->activeMip = (ushort)fallbackMip;
-            removePageMethod(entryID);
+            PageUnmapped?.Invoke(entryID);
 
             for (uint childBits = 0; childBits < 4; ++childBits)
             {

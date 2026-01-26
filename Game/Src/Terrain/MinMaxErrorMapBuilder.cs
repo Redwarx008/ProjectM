@@ -11,7 +11,7 @@ public struct MinMaxErrorMap
     public void GetMinMaxError(int nodeX, int nodeY, out float min, out float max, out float geometricError)
     {
         Debug.Assert(nodeX >= 0 && nodeY >= 0 && nodeX < Width && nodeY < Height);
-        Span<float> floats = MemoryMarshal.Cast<byte, float>(Data);
+        Span<float> floats = MemoryMarshal.Cast<byte, float>(Data.AsSpan());
         int index = ((nodeY * (int)Width) + nodeX) * 4;
         min = floats[index];
         max = floats[index + 1];

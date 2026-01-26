@@ -232,7 +232,7 @@ public partial class Terrain : Node3D
         Material.SetShaderParameter("u_MorphConsts", morphConsts);
         Material.SetShaderParameter("u_LodCount", Data.LodCount);
         Material.SetShaderParameter("u_PagePadding", Data.MapVT.Padding);
-        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.MapVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
+        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.MapVT.GetTexture(0).ToTexture2DArrayRD());
         Material.SetShaderParameter("u_VTPageTable", pageTable.ToTexture2d());
         Material.SetShaderParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
         Material.SetShaderParameter("u_HeightmapSize", new Vector2I(Data.MapVT.Width, Data.MapVT.Height));
