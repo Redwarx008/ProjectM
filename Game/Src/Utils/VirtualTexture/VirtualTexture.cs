@@ -55,186 +55,100 @@ public class VirtualTexture : IDisposable
 
     private PageTable _pageTable;
     private PageCache _pageCache;
-    private PhysicalTexture _physicalTexture;
     private StreamingManager _streamer;
 
     private int _loadedPersistentCount = 0;
 
-    private readonly List<VirtualPageID> _pendingRequests = [];
+    private readonly Dictionary<VirtualPageID, int> _requestCountDic = [];
 
-    private List<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedPendingPages = [];
+    private readonly List<(VirtualPageID page, int count)> _pendingRequests = [];
 
-    private Action<VirtualPageID> _onRemovePage;
-
-    public VirtualTexture(uint maxPageCount, VirtualTextureDesc[] vtDescs)
+    public VirtualTexture(uint pageCapacity, ReadOnlySpan<VirtualTextureDesc> vtDesc)
     {
-        Debug.Assert(maxPageCount <= 2048);
-        _streamer = new StreamingManager();
-        for (int i = 0; i < vtDescs.Length; ++i)
-        {
-            _streamer.RegisterFile(vtDescs[i].filePath, (int)maxPageCount);
-        }
-        var vTInfo = _streamer.GetVTInfo();
-        MaxPageCount = (int)maxPageCount;
+        Debug.Assert(pageCapacity <= 2048);
+        _streamer = new StreamingManager(vtDesc);
+
+        var vTInfo = _streamer.GetVTHeader();
+        MaxPageCount = (int)pageCapacity;
         MipCount = vTInfo.mipmaps;
         Width = vTInfo.width;
         Height = vTInfo.height;
         TileSize = vTInfo.tileSize;
         Padding = vTInfo.padding;
-        _pageTable = new PageTable(Width, Height, TileSize, MipCount);
-        _pageCache = new PageCache(_pageTable, MipCount, (int)(maxPageCount - _pageTable.DynamicPageOffset));
-        _physicalTexture = new PhysicalTexture(maxPageCount, _pageTable.DynamicPageOffset, vTInfo, vtDescs);
-        _onRemovePage = id =>
+        Span<RenderingDevice.DataFormat> formats = stackalloc RenderingDevice.DataFormat[vtDesc.Length];
+        for (int i = 0; i < vtDesc.Length; ++i)
         {
-            _pageCache.Remove(id, out int evictedSlot);
-            Debug.Assert(evictedSlot != -1);
-            _physicalTexture.FreeSlot(evictedSlot);
-        };
-        LoadResidentPages();
+            formats[i] = vtDesc[i].format;
+        }
+        _pageCache = new PageCache(_streamer, (int)pageCapacity, TileSize + 2 * Padding, MipCount, formats);
+        _pageTable = new PageTable(_pageCache, Width, Height, TileSize, MipCount);
     }
 
     public void Update()
     {
         FlushPageRequests();
-        ProcessLoadedPages();
-        _pageTable.UpdateReMap();
-        _physicalTexture.Update();
+        _streamer.Update();
+        _pageTable.UpdateUnmap();
+        _pageCache.UpdateTextureArray();
         _pageTable.UpdateMap();
     }
 
     public void RequestPage(VirtualPageID id)
     {
+        
         VirtualPageID cur = id;
-        while(cur.mip < MipCount - 1)
+        while(cur.mip < MipCount)
         {
-            if (_pageCache.TryMarkLoading(cur))
+            if(!_pageCache.Touch(cur))
             {
-                _pendingRequests.Add(cur);
+                if(_requestCountDic.TryGetValue(cur, out int value))
+                {
+                    _requestCountDic[cur] = ++value;
+                }
+                else
+                {
+                    _requestCountDic[cur] = 1;
+                }
             }
-            else
-            {
-                _pageCache.Touch(cur);
-            }
+
             cur = PageTable.MapToAncestor(cur, cur.mip + 1);
         }
     }
 
     private void FlushPageRequests()
     {
-        if (_pendingRequests.Count == 0)
+        if (_requestCountDic.Count == 0)
             return;
 
-        // mip 越大越先请求（祖先优先）
-        _pendingRequests.Sort((a, b) => b.mip.CompareTo(a.mip));
-
-        foreach (var id in _pendingRequests)
+        foreach(var requestAndCount in _requestCountDic)
         {
-            _streamer.RequestPage(id);
+            _pendingRequests.Add((requestAndCount.Key, requestAndCount.Value));
+        }
+
+        _pendingRequests.Sort((a, b) =>
+        {
+            if(a.page.mip != b.page.mip)
+            {
+                return b.page.mip.CompareTo(a.page.mip);
+            }
+
+            return b.count.CompareTo(a.count);
+        });
+
+        int limit = Math.Min(_pendingRequests.Count, ProcessLimit);
+        for(int i = 0; i < limit; ++i)
+        {
+            _pageCache.Request(_pendingRequests[i].page);
         }
 
         _pendingRequests.Clear();
+        _requestCountDic.Clear();
     }
 
-    private void ProcessLoadedPages()
+
+    public GDTexture2DArray GetTexture(int i)
     {
-        int persistentMip = MipCount - 1;
-        while (_streamer.TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result))
-        {
-            _loadedPendingPages.Add(result);
-        }
-
-        int dynamicBudget = ProcessLimit;
-
-        for (int i = 0; i < _loadedPendingPages.Count; ++i)
-        {
-            var loadedPage = _loadedPendingPages[i];
-
-            bool isPersistent = loadedPage.id.mip == persistentMip;
-            if (!isPersistent && dynamicBudget <= 0)
-            {
-                DiscardPage(loadedPage);
-                continue;
-            }
-
-            int targetSlot;
-
-            if (isPersistent)
-            {
-                _pageCache.TryGetPhysicalSlot(loadedPage.id, out targetSlot);
-                CommitUpdate(loadedPage, targetSlot);
-                _loadedPersistentCount++;
-                Debug.WriteLineIf(_loadedPersistentCount == _pageTable.DynamicPageOffset, "[VT] Persistent Pages Ready");
-                //if (_loadedPersistentCount == _pageTable.DynamicPageOffset)
-                //{
-                //    Logger.Info();
-                //}
-            }
-            else
-            {
-                --dynamicBudget;
-
-                if (_physicalTexture.TryAllocateDynamicSlot(out targetSlot))
-                {
-                    _pageCache.Add(loadedPage.id, targetSlot);
-                    CommitUpdate(loadedPage, targetSlot);
-                }
-                else
-                {
-                    _pageCache.EvictOne(out var evictedId, out int evictedSlot);
-                    //Logger.Debug($"[VT] Evict Page: {evictedId} {evictedSlot}");
-                    _pageTable.RemapPage(evictedId, _onRemovePage);
-                    Debug.Assert(evictedSlot != -1);
-                    _pageCache.Add(loadedPage.id, evictedSlot);
-                    CommitUpdate(loadedPage, evictedSlot);
-                }
-            }
-        }
-
-        _loadedPendingPages.Clear();
-    }
-
-    private void CommitUpdate((int textureId, VirtualPageID id, IMemoryOwner<byte> data) page, int slot)
-    {
-        _pageCache.MarkLoadComplete(page.id);
-        // 1. 提交数据更新 (RD.TextureUpdate)
-        _physicalTexture.AddUpdate(page.textureId, slot, page.data);
-        // 2. 更新页表映射
-        _pageTable.MapPage(page.id, slot);
-    }
-
-    private void DiscardPage((int textureId, VirtualPageID id, IMemoryOwner<byte> data) page)
-    {
-        page.data.Dispose();
-        // 通知 Cache 该页面“处理结束”（尽管是失败的）
-        // 这样 PageCache 会从 _loadingPages 移除它。
-        // 如果下一帧相机还在那里，RequestPage 会再次发现它不在 Cache 里，从而重新请求。
-        _pageCache.MarkLoadComplete(page.id);
-    }
-
-    private void LoadResidentPages()
-    {
-        int persistentMip = MipCount - 1;
-        int pageCountX = _pageTable.PersistentMipWidth;
-        int pageCountY = _pageTable.PersistentMipHeight;
-        for (int y = 0; y < pageCountY; ++y)
-        {
-            for (int x = 0; x < pageCountX; ++x)
-            {
-                var id = new VirtualPageID()
-                {
-                    x = x,
-                    y = y,
-                    mip = persistentMip,
-                };
-                _pageCache.TryMarkLoading(id);
-                _streamer.RequestPage(id);
-            }
-        }
-    }
-
-    public GDTexture2DArray GetPhysicalTexture(int i)
-    {
-        return _physicalTexture[i];
+        return _pageCache.GetTexture(i);
     }
 
     public GDTexture2D? GetIndirectTexture()
@@ -249,12 +163,7 @@ public class VirtualTexture : IDisposable
 
     public void Dispose()
     {
-        foreach(var loadedPage in _loadedPendingPages)
-        {
-            loadedPage.data.Dispose();
-        }
-        _loadedPendingPages.Clear();
+        _pageCache.Dispose();
         _pageTable.Dispose();
-        _physicalTexture.Dispose();
     }
 }

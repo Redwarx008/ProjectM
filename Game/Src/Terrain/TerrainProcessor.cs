@@ -165,7 +165,7 @@ internal class TerrainProcessor : IDisposable
         Debug.Assert(_terrain.Data.MapVT != null);
 
         ReadOnlySpan<Vector4> frustumPlanes = MemoryMarshal.CreateReadOnlySpan(ref _pushConstants.frustumPlane0, 6);
-        Span<QuadTree.Node> selections = stackalloc QuadTree.Node[200];
+        Span<QuadTree.Node> selections = stackalloc QuadTree.Node[MaxNodeInSelect];
         var selectDesc = new QuadTree.SelectDesc()
         {
             planes = frustumPlanes,

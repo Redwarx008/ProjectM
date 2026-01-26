@@ -12,8 +12,6 @@ internal partial class AutoLoad : Node
     public override void _Ready()
     {
         base._Ready();
-        // see https://github.com/godotengine/godot/issues/108965
-        System.Diagnostics.Trace.Listeners.Add(new DefaultTraceListener());
         SetLogFunction();
         InitVirtualFileSystem();
     }

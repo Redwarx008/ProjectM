@@ -10,6 +10,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using static ProjectM.VirtualTexture;
+using static QuadTree;
 using Logger = Core.Logger;
 
 namespace ProjectM;
@@ -26,7 +27,7 @@ internal unsafe class PageTable : IDisposable
         public bool Equals(PageUpdateInfo other)
         {
             return x == other.x && y == other.y && mip == other.mip &&
-                   mappingSlot == other.mappingSlot && activeMip == other.activeMip;
+               mappingSlot == other.mappingSlot && activeMip == other.activeMip;
         }
         public override bool Equals(object? obj)
         {
@@ -55,30 +56,25 @@ internal unsafe class PageTable : IDisposable
             }
         }
     }
-     
+
     private class PageUpdateInfoComparer : IComparer<PageUpdateInfo>
     {
         public int Compare(PageUpdateInfo a, PageUpdateInfo b)
         {
             int c;
 
-            // 1. mip（高 mip 先）
             c = b.mip.CompareTo(a.mip);
             if (c != 0) return c;
 
-            // 2. y
             c = a.y.CompareTo(b.y);
             if (c != 0) return c;
 
-            // 3. x
             c = a.x.CompareTo(b.x);
             if (c != 0) return c;
 
-            // 4. mappingSlot
-            c = a.mappingSlot.CompareTo(b.mappingSlot);
+            c = a.mappingSlot.CompareTo(b.mappingSlot);
             if (c != 0) return c;
 
-            // 5. activeMip
             return a.activeMip.CompareTo(b.activeMip);
         }
     }
@@ -109,7 +105,7 @@ internal unsafe class PageTable : IDisposable
 
         public void Return(SortedSet<PageUpdateInfo>[] sets, bool clear = false)
         {
-            if(clear)
+            if (clear)
             {
                 for (int i = 0; i < sets.Length; i++)
                 {
@@ -145,7 +141,7 @@ internal unsafe class PageTable : IDisposable
     public GDTexture2D? IndirectTexture { get; private set; }
 
     // 二维数组：第一维是 Mip 层级，第二维是莫顿排序的 Entry 数组
-    private PageEntry** _mipBasePages;
+    private PageEntry[][] _mipBasePages;
 
     private (int w, int h)[] _mipRealBounds;
 
@@ -156,7 +152,7 @@ internal unsafe class PageTable : IDisposable
 
     private Callable _cachedDispatchCallback;
 
-    private int _persistentMip;
+    private int _topMipLevel;
 
     private Rid _pipeline;
 
@@ -168,26 +164,27 @@ internal unsafe class PageTable : IDisposable
 
     private bool _pipelineInited;  //todo: 可能并不需要?
 
-    public int DynamicPageOffset { get; set; } = int.MaxValue;
-    public int PersistentMipWidth { get; private set; }
-    public int PersistentMipHeight { get; private set; }
+    public int TopMipWidth { get; private set; }
+    public int TopMipHeight { get; private set; }
 
     public static int CMaxPageTableSize = 2048;
 
-    public PageTable(int l0Width, int l0Height, int tileSize, int mipCount)
+    public PageTable(PageCache pageCache, int l0Width, int l0Height, int tileSize, int mipCount)
     {
         _textureViewPerMip = new Rid[mipCount];
+        _mipBasePages = new PageEntry[mipCount][];
         _setArrayPool = new SortedSetArrayPool(mipCount, new PageUpdateInfoComparer());
         _activeMapSets = _setArrayPool.Rent();
         _activeRemapSets = _setArrayPool.Rent();
-        _persistentMip = mipCount - 1;
         _mipRealBounds = new (int w, int h)[mipCount];
-        CalculateLayout(l0Width, l0Height, tileSize);
+        pageCache.AddPage += MapPage;
+        pageCache.RemovePage += UnmapPage;
+        CalculateLayout(l0Width, l0Height, tileSize, mipCount);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
-            int persistentMipRange = (1 << _persistentMip);
-            int width = PersistentMipWidth * persistentMipRange;
-            int height = PersistentMipHeight * persistentMipRange;
+            int persistentMipRange = (1 << _topMipLevel);
+            int width = TopMipWidth * persistentMipRange;
+            int height = TopMipHeight * persistentMipRange;
 
             var desc = new GDTextureDesc()
             {
@@ -196,7 +193,7 @@ internal unsafe class PageTable : IDisposable
                 Height = (uint)height,
                 Mipmaps = (uint)mipCount,
                 UsageBits = Godot.RenderingDevice.TextureUsageBits.StorageBit | Godot.RenderingDevice.TextureUsageBits.SamplingBit
-|                   Godot.RenderingDevice.TextureUsageBits.CanCopyToBit | Godot.RenderingDevice.TextureUsageBits.CanCopyFromBit
+      | Godot.RenderingDevice.TextureUsageBits.CanCopyToBit | Godot.RenderingDevice.TextureUsageBits.CanCopyFromBit
             };
             IndirectTexture = GDTexture2D.Create(desc);
             BuildPipeline();
@@ -207,55 +204,59 @@ internal unsafe class PageTable : IDisposable
     public void MapPage(VirtualPageID id, int physicalSlot)
     {
         Debug.Assert(IsValid(id.mip, id.x, id.y));
-        // 设置当前页面的状态
         uint rootMorton = MathExtension.EncodeMorton(id.x, id.y);
 
-        PageEntry* pageEntry = _mipBasePages[id.mip] + rootMorton;
-        pageEntry->mappingSlot = (short)physicalSlot;
-        pageEntry->activeMip = (ushort)id.mip;
-
-        AddUpdateMap(id.x, id.y, id.mip, id.mip, *pageEntry);
+        ref PageEntry pageEntry = ref _mipBasePages[id.mip][rootMorton];
+        pageEntry.mappingSlot = (short)physicalSlot;
+        pageEntry.activeMip = (ushort)id.mip;
 
         //int mipOffset = 0;
         //int range = 1;
         //for (int mip = id.mip - 1; mip >= 0; --mip)
         //{
-        //    mipOffset += 1;
-        //    range *= 4;
-        //    int subPageIdxBegin = (int)idx << (mipOffset * 2);
-        //    for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
-        //    {
-        //        (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
-        //        if (!IsValid(mip, coord.x, coord.y))
-        //        {
-        //            continue;
-        //        }
-
-        //        PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
-        //        if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
+        //    mipOffset += 1;
+        //    range *= 4;
+        //    int subPageIdxBegin = (int)idx << (mipOffset * 2);
+        //    for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
+        //    {
+        //        (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
+        //        if (!IsValid(mip, coord.x, coord.y))
         //        {
-        //            for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
-        //            {
-        //                AddUpdateMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
-        //            }
-        //        }
-        //    }
+        //            continue;
+        //        }
 
-        //    AddUpdateMap(id.x, id.y, id.mip, mip, *pageEntry);
+        //        PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
+        //        if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
+        //        {
+        //            for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
+        //            {
+        //                AddUpdateMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
+        //            }
+        //        }
+        //    }
+
+        //    AddUpdateMap(id.x, id.y, id.mip, mip, *pageEntry);
         //}
-
-        for (int mip = id.mip - 1; mip >= 0; --mip)
+        for (int coveredMip = id.mip; coveredMip >= 0; --coveredMip)
         {
-            AddUpdateMap(id.x, id.y, id.mip, mip, *pageEntry);
+            AddUpdateMap(id.x, id.y, id.mip, coveredMip, pageEntry);
         }
-
         Span<MortonDFSNode> stack = stackalloc MortonDFSNode[64];
         int top = 0;
-        stack[top++] = new MortonDFSNode
+        //stack[top++] = new MortonDFSNode
+        //{
+        //    mip = id.mip,
+        //    morton = rootMorton
+        //};
+
+        for (uint childBits = 0; childBits < 4; ++childBits)
         {
-            mip = id.mip - 1,
-            morton = rootMorton << 2
-        };
+            stack[top++] = new MortonDFSNode
+            {
+                mip = id.mip - 1,
+                morton = (rootMorton << 2) | childBits
+            };
+        }
         while (top > 0)
         {
             MortonDFSNode node = stack[--top];
@@ -270,21 +271,20 @@ internal unsafe class PageTable : IDisposable
                 continue;
             }
 
-            PageEntry* entry =
-                _mipBasePages[node.mip] + node.morton;
+            ref PageEntry entry =
+              ref _mipBasePages[node.mip][node.morton];
 
-            if (entry->mappingSlot == -1 ||
-                    entry->activeMip != node.mip)
-            {
-                continue;
-            }
-
-            if(entry->activeMip == node.mip && entry->mappingSlot != -1)
+            if (entry.activeMip == node.mip && entry.mappingSlot != -1)
             {
                 for (int subPageMip = node.mip; subPageMip >= 0; --subPageMip)
                 {
-                    AddUpdateMap(x, y, node.mip, subPageMip, *entry);
+                    AddUpdateMap(x, y, node.mip, subPageMip, entry);
                 }
+            }
+            else
+            {
+                entry.mappingSlot = (short)physicalSlot;
+                entry.activeMip = (ushort)id.mip;
             }
 
             for (uint childBits = 0; childBits < 4; ++childBits)
@@ -296,84 +296,60 @@ internal unsafe class PageTable : IDisposable
                 };
             }
         }
-        //Logger.Debug($"[VT]: map page : {id} {physicalSlot}");
-    }
+        //Logger.Debug($"[VT]: map page : {id} {physicalSlot}");
+    }
 
     private struct MortonDFSNode
     {
         public int mip;
         public uint morton;
     }
-    public void RemapPage(VirtualPageID id, Action<VirtualPageID> removePageMethod)
+    public void UnmapPage(VirtualPageID id)
     {
         Debug.Assert(IsValid(id.mip, id.x, id.y));
+        //Debug.Assert(id.mip != _topMipLevel);
+        if (id.mip == _topMipLevel)
+            return;
+
         int fallbackSlot = -1;
         int fallbackMip = -1;
 
-        VirtualPageID ancestor = MapToAncestor(id, _persistentMip);
-        uint persistentMorton = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
-        PageEntry* fallbackEntry = _mipBasePages[_persistentMip] + persistentMorton;
-        Debug.Assert(fallbackEntry->mappingSlot != -1 && fallbackEntry->activeMip == _persistentMip);
-        fallbackSlot = fallbackEntry->mappingSlot;
-        fallbackMip = fallbackEntry->activeMip;
+        for (int m = id.mip + 1; m <= _topMipLevel; m++)
+        {
+            VirtualPageID ancestor = MapToAncestor(id, m);
+            uint idxInMip = MathExtension.EncodeMorton(ancestor.x, ancestor.y);
+            ref PageEntry entry = ref _mipBasePages[m][idxInMip];
+            if (entry.activeMip == m && entry.mappingSlot != -1)
+            {
+                fallbackSlot = entry.mappingSlot;
+                fallbackMip = entry.activeMip;
+                break;
+            }
+        }
+        Debug.Assert(fallbackSlot != -1 && fallbackMip != -1);
 
         uint rootMorton = MathExtension.EncodeMorton(id.x, id.y);
 
-        PageEntry* pageEntry = _mipBasePages[id.mip] + rootMorton;
-        pageEntry->mappingSlot = (short)fallbackSlot;
-        pageEntry->activeMip = (ushort)fallbackMip;
+        ref PageEntry pageEntry = ref _mipBasePages[id.mip][rootMorton];
+        pageEntry.mappingSlot = (short)fallbackSlot;
+        pageEntry.activeMip = (ushort)fallbackMip;
 
-        AddUpdateReMap(id.x, id.y, id.mip, id.mip, *pageEntry);
 
-        //int mipOffset = 0;
-        //int range = 1;
-        //for (int mip = id.mip - 1; mip >= 0; --mip)
-        //{
-        //    mipOffset += 1;
-        //    range *= 4;
-        //    int subPageIdxBegin = (int)rootMorton << (mipOffset * 2);
-        //    for (int subPageIdx = subPageIdxBegin; subPageIdx < subPageIdxBegin + range; ++subPageIdx)
-        //    {
-        //        (int x, int y) coord = MathExtension.DecodeMorton((uint)subPageIdx);
-        //        if (!IsValid(mip, coord.x, coord.y))
-        //        {
-        //            continue;
-        //        }
-
-        //        PageEntry* subPageEntry = _mipBasePages[mip] + subPageIdx;
-        //        if (subPageEntry->mappingSlot != -1 && subPageEntry->activeMip == mip) //当子页面已加载资源时需要将其区域再覆盖一次
-        //        {
-        //            //for (int subPageMip = mip; subPageMip >= 0; --subPageMip)
-        //            //{
-        //            //    AddUpdateReMap(coord.x, coord.y, mip, subPageMip, *subPageEntry);
-        //            //}
-        //            var subPageId = new VirtualPageID()
-        //            {
-        //                x = coord.x,
-        //                y = coord.y,
-        //                mip = mip,
-        //            };
-        //            subPageEntry->mappingSlot = (short)fallbackSlot;
-        //            subPageEntry->activeMip = (ushort)fallbackMip;
-        //            removePageMethod(subPageId);
-        //            Logger.Debug($"[VT]: remove subpage : {subPageId}");
-        //        }
-        //    }
-        //    AddUpdateReMap(id.x, id.y, id.mip, mip, *pageEntry);
-        //}
-
-        for (int mip = id.mip - 1; mip >= 0; --mip)
+        for (int mip = id.mip; mip >= 0; --mip)
         {
-            AddUpdateReMap(id.x, id.y, id.mip, mip, *pageEntry);
+            AddUpdateUnmap(id.x, id.y, id.mip, mip, pageEntry);
         }
 
         Span<MortonDFSNode> stack = stackalloc MortonDFSNode[64];
         int top = 0;
-        stack[top++] = new MortonDFSNode
+        for (uint childBits = 0; childBits < 4; ++childBits)
         {
-            mip = id.mip - 1,
-            morton = rootMorton << 2
-        };
+            stack[top++] = new MortonDFSNode
+            {
+                mip = id.mip - 1,
+                morton = (rootMorton << 2) | childBits
+            };
+        }
         while (top > 0)
         {
             MortonDFSNode node = stack[--top];
@@ -381,14 +357,14 @@ internal unsafe class PageTable : IDisposable
             if (node.mip < 0)
                 continue;
 
-            PageEntry* entry =
-                _mipBasePages[node.mip] + node.morton;
+            ref PageEntry entry =ref _mipBasePages[node.mip][node.morton];
 
-            if (entry->mappingSlot == -1 ||
-                    entry->activeMip != node.mip)
+            if (entry.mappingSlot == -1 ||
+                    entry.activeMip != node.mip)
             {
-                continue;
+                    continue;
             }
+
             (int x, int y) = MathExtension.DecodeMorton((uint)node.morton);
 
             Debug.Assert(IsValid(node.mip, x, y));
@@ -399,9 +375,8 @@ internal unsafe class PageTable : IDisposable
                 x = x,
                 y = y
             };
-            entry->mappingSlot = (short)fallbackSlot;
-            entry->activeMip = (ushort)fallbackMip;
-            removePageMethod(entryID);
+            entry.mappingSlot = (short)fallbackSlot;
+            entry.activeMip = (ushort)fallbackMip;
 
             for (uint childBits = 0; childBits < 4; ++childBits)
             {
@@ -426,14 +401,14 @@ internal unsafe class PageTable : IDisposable
         var setsToSubmit = activeSets;
         activeSets = _setArrayPool.Rent();
         RenderingServer.CallOnRenderThread(Callable.From(() => //todo: use Callable.Bind() in the future.
-        {
+        {
             Dispatch(setsToSubmit, _setArrayPool);
         }));
     }
 
     public void UpdateMap() => SubmitBatch(ref _activeMapSets);
 
-    public void UpdateReMap() => SubmitBatch(ref _activeRemapSets);
+    public void UpdateUnmap() => SubmitBatch(ref _activeRemapSets);
 
     private void Dispatch(SortedSet<PageUpdateInfo>[] pageUpdateSetPerMip, SortedSetArrayPool pool)
     {
@@ -451,23 +426,23 @@ internal unsafe class PageTable : IDisposable
                 int scale = 1 << (info.mip - coveredMip);
 
                 var origin = new Vector2I(
-                  info.x * scale,
-                  info.y * scale
+                 info.x * scale,
+                 info.y * scale
                 );
 
                 var (w, h) = _mipRealBounds[coveredMip];
 
                 var size = new Vector2I(
-                  Math.Min(scale, w - origin.X),
-                  Math.Min(scale, h - origin.Y)
+                 Math.Min(scale, w - origin.X),
+                 Math.Min(scale, h - origin.Y)
                 );
 
                 if (size.X <= 0 || size.Y <= 0)
                     continue;
 
                 var value = new Vector2I(
-                  info.mappingSlot,
-                  info.activeMip
+                 info.mappingSlot,
+                 info.activeMip
                 );
 
                 var pushConstants = new ShaderPushConstants()
@@ -478,7 +453,7 @@ internal unsafe class PageTable : IDisposable
                     value = value,
                 };
                 ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(
-                    MemoryMarshal.CreateReadOnlySpan<ShaderPushConstants>(ref pushConstants, 1));
+                  MemoryMarshal.CreateReadOnlySpan<ShaderPushConstants>(ref pushConstants, 1));
 
                 rd.ComputeListSetPushConstant(list, bytes, (uint)bytes.Length);
                 rd.ComputeListDispatch(list, (uint)Math.Ceiling(size.X / 8f), (uint)Math.Ceiling(size.Y / 8f), 1);
@@ -523,8 +498,7 @@ internal unsafe class PageTable : IDisposable
 
     private void InitializeCpuTable()
     {
-        int mipCount = _persistentMip + 1;
-        _mipBasePages = (PageEntry**)NativeMemory.Alloc((nuint)(mipCount * sizeof(PageEntry*)));
+        int mipCount = _topMipLevel + 1;
         for (int mip = 0; mip < mipCount; mip++)
         {
             int tileX = _mipRealBounds[mip].w;
@@ -533,27 +507,24 @@ internal unsafe class PageTable : IDisposable
             int pow2 = MathExtension.GetNextPowerOfTwo(maxDim);
             Debug.Assert(pow2 <= CMaxPageTableSize);
             nuint totalEntries = (nuint)(pow2 * pow2);
-            nuint sizeInBytes = totalEntries * (nuint)sizeof(PageEntry);
-            PageEntry* ptr = (PageEntry*)NativeMemory.Alloc(sizeInBytes);
-            _mipBasePages[mip] = ptr;
-            var span = new Span<PageEntry>(ptr, (int)totalEntries);
-            span.Fill(new PageEntry(-1, _persistentMip));
+            _mipBasePages[mip] = new PageEntry[totalEntries];
+            Array.Fill(_mipBasePages[mip], new PageEntry(-1, _topMipLevel));
         }
 
     }
 
-    private void CalculateLayout(int l0Width, int l0Height, int tileSize)
+    private void CalculateLayout(int l0Width, int l0Height, int tileSize, int mipCount)
     {
-        int scale = 1 << _persistentMip;
+        _topMipLevel = mipCount - 1;
+        int scale = 1 << _topMipLevel;
         int w = (int)Math.Ceiling(l0Width / (float)(tileSize * scale));
         int h = (int)Math.Ceiling(l0Height / (float)(tileSize * scale));
         w = Math.Max(1, w); h = Math.Max(1, h);
-        PersistentMipWidth = w; PersistentMipHeight = h;
-        DynamicPageOffset = PersistentMipWidth * PersistentMipHeight;
+        TopMipWidth = w; TopMipHeight = h;
         int pageCount = 0;
         int width = l0Width;
         int height = l0Height;
-        for (int mip = 0; mip <= _persistentMip; ++mip)
+        for (int mip = 0; mip <= _topMipLevel; ++mip)
         {
             int tileX = (int)Math.Ceiling(width / (float)tileSize);
             int tileY = (int)Math.Ceiling(height / (float)tileSize);
@@ -566,20 +537,6 @@ internal unsafe class PageTable : IDisposable
 
     public void Dispose()
     {
-        if (_mipBasePages != null)
-        {
-            int mipCount = _persistentMip + 1;
-            for (int i = 0; i < mipCount; i++)
-            {
-                if (_mipBasePages[i] != null)
-                {
-                    NativeMemory.Free(_mipBasePages[i]);
-                }
-            }
-            NativeMemory.Free(_mipBasePages);
-            _mipBasePages = null;
-        }
-
         RenderingServer.CallOnRenderThread(Callable.From(() =>
         {
             var rd = RenderingServer.GetRenderingDevice();
@@ -591,7 +548,7 @@ internal unsafe class PageTable : IDisposable
     public Vector2[] GetRealMipBounds()
     {
         var result = new Vector2[MaxPageTableMipInGpu];
-        for(int i = 0; i < _mipRealBounds.Length; ++i)
+        for (int i = 0; i < _mipRealBounds.Length; ++i)
         {
             result[i] = new Vector2(_mipRealBounds[i].w, _mipRealBounds[i].h);
         }
@@ -629,7 +586,7 @@ internal unsafe class PageTable : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AddUpdateReMap(int x, int y, int mip, int coveredMip, PageEntry entry)
+    private void AddUpdateUnmap(int x, int y, int mip, int coveredMip, PageEntry entry)
     {
         _activeRemapSets[coveredMip].Add(new PageUpdateInfo()
         {
@@ -644,7 +601,7 @@ internal unsafe class PageTable : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsValid(int mip, int x, int y)
     {
-        Debug.Assert(mip >= 0 && mip <= _persistentMip);
+        Debug.Assert(mip >= 0 && mip <= _topMipLevel);
         var bound = _mipRealBounds[mip];
         return x >= 0 && x < bound.w && y >= 0 && y < bound.h;
     }

@@ -8,13 +8,11 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Logger = Core.Logger;
 
-
 public struct TerrainConfig()
 {
     public string? heightmapPath;
     public string? splatmapPath;
     public string? minmaxmapPath;
-    public uint patchSize = 16;
     public float width = 0f;
     public float length = 0f;
     public float height = 200f;
@@ -43,24 +41,7 @@ public partial class Terrain : Node3D
 
     #region Debug Parameters
 
-    [Export]
-    public uint PatchSize
-    {
-        get => _patchSize;
-        set
-        {
-            if (_patchSize != value)
-            {
-                if (_mesh != null)
-                {
-                    Material.SetShaderParameter("u_GridDimension", value);
-                }
-                _patchSize = value;
-            }
-        }
-    }
-
-    private uint _patchSize;
+    public uint PatchSize => (uint)Data.RenderPatchSize;
 
     [Export]
     public float Width
@@ -197,7 +178,6 @@ public partial class Terrain : Node3D
 
     public void LoadConfig(TerrainConfig config)
     {
-        PatchSize = config.patchSize;
         Width = config.width;
         Length = config.length;
         Height = config.height;
@@ -232,7 +212,7 @@ public partial class Terrain : Node3D
         Material.SetShaderParameter("u_MorphConsts", morphConsts);
         Material.SetShaderParameter("u_LodCount", Data.LodCount);
         Material.SetShaderParameter("u_PagePadding", Data.MapVT.Padding);
-        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.MapVT.GetPhysicalTexture(0).ToTexture2DArrayRD());
+        Material.SetShaderParameter("u_VTPhysicalHeightmap", Data.MapVT.GetTexture(0).ToTexture2DArrayRD());
         Material.SetShaderParameter("u_VTPageTable", pageTable.ToTexture2d());
         Material.SetShaderParameter("u_HeightmapLodOffset", Data.HeightmapLodOffset);
         Material.SetShaderParameter("u_HeightmapSize", new Vector2I(Data.MapVT.Width, Data.MapVT.Height));

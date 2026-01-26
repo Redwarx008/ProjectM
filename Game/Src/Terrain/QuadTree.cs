@@ -56,13 +56,12 @@ public class QuadTree
             for (int x = 0; x < TopNodeCountX; x++)
             {
                 int lodLevelCount = _minMaxMaps.Length;
-                NodeSelect(x * TopNodeSize, y * TopNodeSize, TopNodeSize, lodLevelCount - 1, false, ref selectDesc);
+                NodeSelect(x * TopNodeSize, y * TopNodeSize, TopNodeSize, lodLevelCount - 1, ref selectDesc);
             }
         }
     }
 
-    private void NodeSelect(int x, int y, int size, int lodLevel,
-        bool parentCompletelyInFrustum, ref SelectDesc selectDesc)
+    private void NodeSelect(int x, int y, int size, int lodLevel, ref SelectDesc selectDesc)
     {
         int nodeX = x / size;
         int nodeY = y / size;
@@ -76,22 +75,15 @@ public class QuadTree
         var boundsMin = new Vector3()
         {
             X = selectDesc.mapOffset.X + x * mapScale.X,
-            Y = selectDesc.mapOffset.Y + minZ / ushort.MaxValue * mapScale.Y,
+            Y = selectDesc.mapOffset.Y + (float)minZ / ushort.MaxValue * mapScale.Y,
             Z = selectDesc.mapOffset.Z + y * mapScale.Z
         };
         var boundsMax = new Vector3()
         {
             X = selectDesc.mapOffset.X + (x + size) * mapScale.X,
-            Y = selectDesc.mapOffset.Y + maxZ / ushort.MaxValue * mapScale.Y,
+            Y = selectDesc.mapOffset.Y + (float)maxZ / ushort.MaxValue * mapScale.Y,
             Z = selectDesc.mapOffset.Z + (y + size) * mapScale.Z
         };
-        IntersectType cullResult = parentCompletelyInFrustum ? IntersectType.Inside :
-            MathExtension.FrustumCullAABB(boundsMin, boundsMax, selectDesc.planes);
-
-        //if (cullResult == IntersectType.Outside)
-        //{
-        //    return;
-        //}
 
         float distanceSq = MathExtension.MinDistanceFromPointToAabbSquare(boundsMin, boundsMax, selectDesc.viewerPos);
 
@@ -113,26 +105,24 @@ public class QuadTree
         }
         else
         {
-            bool weAreCompletelyInFrustum = cullResult == IntersectType.Inside;
-
             _minMaxMaps[lodLevel - 1].GetSubNodesExist(nodeX, nodeY,
                 out bool subTLExist, out bool subTRExist, out bool subBLExist, out bool subBRExist);
             int halfSize = size / 2;
             if (subTLExist)
             {
-                NodeSelect(x, y, halfSize, lodLevel - 1, weAreCompletelyInFrustum, ref selectDesc);
+                NodeSelect(x, y, halfSize, lodLevel - 1, ref selectDesc);
             }
             if (subTRExist)
             {
-                NodeSelect(x + halfSize, y, halfSize, lodLevel - 1, weAreCompletelyInFrustum, ref selectDesc);
+                NodeSelect(x + halfSize, y, halfSize, lodLevel - 1, ref selectDesc);
             }
             if (subBLExist)
             {
-                NodeSelect(x, y + halfSize, halfSize, lodLevel - 1, weAreCompletelyInFrustum, ref selectDesc);
+                NodeSelect(x, y + halfSize, halfSize, lodLevel - 1, ref selectDesc);
             }
             if (subBRExist)
             {
-                NodeSelect(x + halfSize, y + halfSize, halfSize, lodLevel - 1, weAreCompletelyInFrustum, ref selectDesc);
+                NodeSelect(x + halfSize, y + halfSize, halfSize, lodLevel - 1, ref selectDesc);
             }
         }
     }

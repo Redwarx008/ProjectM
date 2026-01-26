@@ -33,6 +33,8 @@ public class TerrainData : IDisposable
         }
     }
 
+    public int RenderPatchSize { get; private set; }
+
     private Terrain _terrain;
 
     public TerrainData(Terrain terrain)
@@ -47,6 +49,7 @@ public class TerrainData : IDisposable
     {
         LoadHeightMapVT(config.heightmapPath);
         MinMaxMap[] data = LoadMinMaxMapsData(config.minmaxmapPath);
+        CalcHeightmapLodOffsetToMip(MapVT!.TileSize, RenderPatchSize);
         StreamingQuadTree = new QuadTree(data[HeightmapLodOffset..], MapVT!.TileSize, 
             HeightmapDimX, HeightmapDimY, HeightmapLodOffset);
         RenderingServer.CallOnRenderThread(Callable.From(() =>
@@ -96,9 +99,11 @@ public class TerrainData : IDisposable
         if (!File.Exists(file))
         {
             Logger.Error($"Can't find heightmap.height file at {file}.");
-            return MinMaxMap.CreateDefault(_terrain.PatchSize, HeightmapDimX, HeightmapDimY, Terrain.MaxLodCount);
+            throw new FileNotFoundException($"Can't find heightmap.bounds file at {file}.");
         }
-        MinMaxMap[] minMaxMapsData = MinMaxMap.LoadAll(file);
+        MinMaxMap[] minMaxMapsData = MinMaxMap.LoadAll(file, out int leafNodeSize);
+        Debug.Assert(leafNodeSize * minMaxMapsData[0].Width == HeightmapDimX && leafNodeSize * minMaxMapsData[0].Height == HeightmapDimY);
+        RenderPatchSize = leafNodeSize;
         MinMaxMaps = new GDTexture2D[minMaxMapsData.Length];
         return minMaxMapsData;
     }
@@ -114,14 +119,13 @@ public class TerrainData : IDisposable
         {
             new VirtualTextureDesc()
             {
-                format = RenderingDevice.DataFormat.R8G8B8A8Unorm,
+                format = RenderingDevice.DataFormat.R16Unorm,
                 filePath = file
             }
         };
         MapVT = new VirtualTexture(Terrain.MaxVTPageCount, descs);
         HeightmapDimX = MapVT.Width;
         HeightmapDimY = MapVT.Height;
-        CalcHeightmapLodOffsetToMip(MapVT.TileSize, (int)_terrain.PatchSize);
     }
 
     private void CalcHeightmapLodOffsetToMip(int pageSize, int leafNodeSize)

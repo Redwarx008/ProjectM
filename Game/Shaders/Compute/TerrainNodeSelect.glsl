@@ -117,10 +117,10 @@ void main()
 	vec3 boundsMin = vec3(xy.x, minMax.x, xy.y);
 	vec3 boundsMax = vec3(xy.x + size.x, minMax.y, xy.y + size.y);
 
-//	if (!boxIntersect((boundsMin + boundsMax) * 0.5, (boundsMax - boundsMin) * 0.5))
-//	{
-//		return;
-//	}
+	if (!boxIntersect((boundsMin + boundsMax) * 0.5, (boundsMax - boundsMin) * 0.5))
+	{
+		return;
+	}
 	
 	float distSq = minDistanceSqFromPointToAabb(boundsMin, boundsMax, cameraPos.xyz);
 

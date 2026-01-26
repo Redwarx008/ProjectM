@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -29,6 +30,8 @@ namespace LateMing
                     // Unload any other unloadable references
                 };
             }
+            // see https://github.com/godotengine/godot/issues/108965
+            System.Diagnostics.Trace.Listeners.Add(new DefaultTraceListener());
         }
     }
 }

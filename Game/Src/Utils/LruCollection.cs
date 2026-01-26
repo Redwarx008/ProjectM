@@ -86,7 +86,7 @@ public class LRUCollection<TKey, TValue> where TKey : notnull
         return false;
     }
 
-    public bool TryPopOldest(out TKey key, out TValue value)
+    public bool PopLast(out TKey key, out TValue value)
     {
         if (_list.Last != null)
         {

@@ -32,6 +32,7 @@ uniform int u_LodCount;
 varying vec4 v_DebugColor;
 
 varying flat int v_RequestHeightMip;
+varying float v_morphLerpK;
 
 
 ivec2 PageTableSize(int mip)
@@ -129,12 +130,40 @@ vec2 morphVertex(vec2 localPos, vec2 globalPos, float morphLerpK, float gridScal
     return globalPos - movePart * u_MapScale.xz * gridScale * morphLerpK;
 }
 
+float SampleHeightVTBlend(vec2 globalUv, int lodLevel, float morphLerpK)
+{
+    int mip0 = max(lodLevel - u_HeightmapLodOffset, 0);
+    int mip1 = clamp(lodLevel + 1 - u_HeightmapLodOffset , 0, u_LodCount - 1);
+
+    float h0 = SampleHeightVT(globalUv, mip0);
+    float h1 = SampleHeightVT(globalUv, mip1);
+
+    return mix(h0, h1, morphLerpK);
+}
+
+float SampleHeightBlend(vec2 uv, int lodLevel, float morphLerpK)
+{
+    return SampleHeightVTBlend(uv, lodLevel, morphLerpK);
+}
+
+vec3 CalculateNormalVTBlend(vec2 uv, int lodLevel, float morphLerpK)
+{
+    vec2 texelSize = 1.0 / vec2(u_HeightmapSize);
+
+    float l = SampleHeightBlend(uv + vec2(-texelSize.x, 0), lodLevel, morphLerpK);
+    float r = SampleHeightBlend(uv + vec2( texelSize.x, 0), lodLevel, morphLerpK);
+    float u = SampleHeightBlend(uv + vec2(0, -texelSize.y), lodLevel, morphLerpK);
+    float d = SampleHeightBlend(uv + vec2(0,  texelSize.y), lodLevel, morphLerpK);
+
+    return normalize(vec3(l - r, 2.0, u - d));
+}
+
 void vertex()
 {
 	int lodLevel = int(INSTANCE_CUSTOM.x);
 	float gridScale = float(1 << lodLevel);
 
-	vec3 worldPos = (MODEL_MATRIX * vec4(VERTEX * gridScale * u_MapScale.xyz, 1)).xyz + u_MapOffset.xyz;
+	vec3 worldPos = (MODEL_MATRIX * vec4(VERTEX * gridScale * u_MapScale.xyz, 1)).xyz;
 	float viewerDist = distance(worldPos, CAMERA_POSITION_WORLD);
 	float morphLerpK  = 1.0f - clamp( u_MorphConsts[lodLevel].x - viewerDist *  u_MorphConsts[lodLevel].y, 0.0, 1.0 );
 	worldPos.xz = morphVertex(VERTEX.xz, worldPos.xz, morphLerpK, gridScale);
@@ -143,18 +172,23 @@ void vertex()
 	vec2 mapSize = vec2(u_HeightmapSize - 1u) * u_MapScale.xz + u_MapOffset.xz;
 	worldPos.xz = min(worldPos.xz, mapSize);
 	UV = (worldPos.xz - u_MapOffset.xz) / mapSize;
+    float height =
+        SampleHeightVTBlend(UV, lodLevel, morphLerpK);
+	//float height = SampleHeightVT(UV, lodLevel);
+    worldPos.y = height;
 
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(worldPos, 1);
+	v_morphLerpK = morphLerpK;
 }
 
 void fragment()
 {
-	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormal(UV);
-	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, 0);
-	//worldNormal = normalize(worldNormal);
-	//NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
+	vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVT(UV, 0);
+	//vec3 worldNormal = u_inverseTransposedTransform * CalculateNormalVTBlend(UV, 0, v_morphLerpK);
+	worldNormal = normalize(worldNormal);
+	NORMAL = (VIEW_MATRIX * vec4(worldNormal, 0.0)).xyz;
 	vec3 virtualTextureUV = GetVirtualTextureUV(UV, 0);
-	ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
-	//ALBEDO = texture(u_DebugGridTexture, UV * vec2(u_HeightmapSize) / 128.0 * 16.0).rgb;
+	//ALBEDO = texture(u_VTPhysicalHeightmap, virtualTextureUV).rgb;
+	ALBEDO = texture(u_DebugGridTexture, UV * vec2(u_HeightmapSize) / 128.0 * 16.0).rgb;
 	//ALBEDO *= v_debugColor.rgb;
 }

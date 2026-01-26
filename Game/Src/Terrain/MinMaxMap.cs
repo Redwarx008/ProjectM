@@ -56,7 +56,7 @@ public class MinMaxMap
             writer.Write(byteView);
         }
     }
-    public static MinMaxMap[] LoadAll(string filePath)
+    public static MinMaxMap[] LoadAll(string filePath, out int leafNodeSize)
     {
         if (!File.Exists(filePath)) throw new FileNotFoundException("File not found", filePath);
 
@@ -64,6 +64,7 @@ public class MinMaxMap
         using var reader = new BinaryReader(fs);
 
         int count = reader.ReadInt32();
+        leafNodeSize = reader.ReadInt32();
         var maps = new MinMaxMap[count];
 
         for (int i = 0; i < count; i++)

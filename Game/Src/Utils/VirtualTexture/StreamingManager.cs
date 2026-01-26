@@ -8,42 +8,39 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using static Godot.HttpRequest;
 
 namespace ProjectM;
 
-internal struct VTInfo
-{
-    public int width;
-    public int height;
-    public int tileSize;
-    public int padding;
-    public int mipmaps;
-}
 internal class StreamingManager : IDisposable
 {
     // 文件路径 -> 加载器实例
-    private List<PageLoader> _loaders = [];
+    private PageLoader[] _loaders;
 
-    private ConcurrentQueue<(int textureId, VirtualPageID id, IMemoryOwner<byte> data)> _loadedQueue = new();
+    private ConcurrentQueue<(VirtualPageID id, IMemoryOwner<byte>? data)> _loadedQueue = new();
 
     private bool _isRunning = true;
     private Thread _ioThread;
 
     private BlockingCollection<VirtualPageID> _requestQueue = [];
 
-    public StreamingManager()
+    private (VirtualPageID id, IMemoryOwner<byte>? data)[] _stageDatas;
+
+    public event Action<Span<(VirtualPageID id, IMemoryOwner<byte>? data)>> LoadComplete = null!;
+
+    public StreamingManager(ReadOnlySpan<VirtualTextureDesc> vtDesc)
     {
-        // 启动后台 I/O 线程
         _ioThread = new Thread(IOThreadLoop)
         {
             IsBackground = true
         };
         _ioThread.Start();
-    }
-
-    public void RegisterFile(string filePath, int maxPageLoadedCount)
-    {
-        _loaders.Add(new PageLoader(filePath, maxPageLoadedCount));
+        _loaders= new PageLoader[vtDesc.Length];
+        _stageDatas = new (VirtualPageID id, IMemoryOwner<byte>? data)[vtDesc.Length];
+        for (int i = 0; i < vtDesc.Length; ++i)
+        {
+            _loaders[i] = new PageLoader(vtDesc[i].filePath);
+        }
     }
 
     public void RequestPage(VirtualPageID id)
@@ -51,29 +48,21 @@ internal class StreamingManager : IDisposable
         _requestQueue.Add(id);
     }
 
-    public VTInfo GetVTInfo()
+    public PageLoader.VTHeader GetVTHeader()
     {
-        Debug.Assert(_loaders.Count > 0);
-        for (int i = 1; i < _loaders.Count; ++i)
+        for (int i = 1; i < _loaders.Length; ++i)
         {
-            if (_loaders[i].Header.Width != _loaders[i - 1].Header.Width || _loaders[i].Header.Height != _loaders[i - 1].Header.Height)
+            if (_loaders[i].Header.width != _loaders[i - 1].Header.width || _loaders[i].Header.height != _loaders[i - 1].Header.height)
             {
                 Logger.Error($"[VT] : The width or height of virtual texture ({_loaders[i].FilePath}) are different from virtual texture ({_loaders[i - 1].FilePath}).\r\n");
             }
 
-            if (_loaders[i].Header.Mipmaps != _loaders[i - 1].Header.Mipmaps)
+            if (_loaders[i].Header.mipmaps != _loaders[i - 1].Header.mipmaps)
             {
                 Logger.Error($"[VT] : The mipmaps virtual texture ({_loaders[i].FilePath}) are different from virtual texture ({_loaders[i - 1].FilePath}).\r\n");
             }
         }
-        return new VTInfo()
-        {
-            width = _loaders[0].Header.Width,
-            height = _loaders[0].Header.Height,
-            tileSize = _loaders[0].Header.TileSize,
-            mipmaps = _loaders[0].Header.Mipmaps,
-            padding = _loaders[0].Header.Padding,
-        };
+        return _loaders[0].Header;
     }
 
     private void IOThreadLoop()
@@ -82,22 +71,14 @@ internal class StreamingManager : IDisposable
         {
             try
             {
-                // 阻塞直到有请求
                 VirtualPageID req = _requestQueue.Take();
 
-                for(int i = 0; i < _loaders.Count; ++i)
+                for(int i = 0; i < _loaders.Length; ++i)
                 {
                     var data = _loaders[i].LoadPage(req.mip, req.x, req.y);
 
-                    if (data != null)
-                    {
-                        _loadedQueue.Enqueue((i, req, data));
-                    }
-                    else
-                    {
-                        // 处理读取失败（越界或文件错误）
-                        // 实际项目中可能需要生成一个空的 fallback 数据
-                    }
+                    _loadedQueue.Enqueue((req, data));
+                    Debug.WriteLineIf(data is null, $"[VT] Load failed for page {req})");
                 }
 
             }
@@ -113,9 +94,30 @@ internal class StreamingManager : IDisposable
         }
     }
 
-    public bool TryGetLoadedPage(out (int textureId, VirtualPageID id, IMemoryOwner<byte> data) result)
+    public void Update()
     {
-        return _loadedQueue.TryDequeue(out result);
+        int batchSize = _loaders.Length;
+
+        while (_loadedQueue.Count >= batchSize)
+        {
+            for (int i = 0; i < batchSize; i++)
+            {
+                if (_loadedQueue.TryDequeue(out var item))
+                {
+                    _stageDatas[i] = item;
+                }
+            }
+
+#if DEBUG
+            var firstId = _stageDatas[0].id;
+            if (_stageDatas[batchSize - 1].id != firstId)
+            {
+                Logger.Error($"[StreamingManager] Batch Mismatch! Expected {_stageDatas[0].id} but got {_stageDatas[batchSize - 1].id}");
+            }
+#endif
+
+            LoadComplete.Invoke(_stageDatas.AsSpan());
+        }
     }
 
     public void Dispose()
@@ -127,6 +129,5 @@ internal class StreamingManager : IDisposable
         {
             loader.Dispose();
         }
-        _loaders.Clear();
     }
 }
